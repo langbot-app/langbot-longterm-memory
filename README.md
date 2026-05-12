@@ -467,3 +467,14 @@ Typical log messages look like:
 [LongTermMemory] engine retrieve called: collection_id=kb-1 top_k=5 session_name=group_123 sender_id=u1 bot_uuid=bot-1 query='user asked about travel plan'
 [LongTermMemory] search_episodes completed: collection_id=kb-1 result_count=3 filters={'user_key': 'bot:bot-1:group_123'}
 ```
+
+## Contributing
+
+We welcome contributions! Feel free to:
+
+- Submit issues for bugs or feature requests
+- Fork the repo and submit pull requests
+- Improve documentation or add examples
+- Share your ideas and feedback
+
+Star the repo if you find it useful!
