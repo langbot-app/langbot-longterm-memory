@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import time
 from typing import Any
 
 from langbot_plugin.api.definition.components.page import Page, PageRequest, PageResponse
@@ -21,8 +22,16 @@ class MemoryConsolePage(Page):
                 return PageResponse.ok(await self._list_episodes(self._body(request)))
             if request.endpoint == "/episodes/search" and request.method == "POST":
                 return PageResponse.ok(await self._search_episodes(self._body(request)))
+            if request.endpoint == "/episodes/export" and request.method == "POST":
+                return PageResponse.ok(await self._export_episodes(self._body(request)))
+            if request.endpoint == "/episodes/status" and request.method == "POST":
+                return PageResponse.ok(await self._set_episode_status(self._body(request)))
             if request.endpoint == "/episodes/delete" and request.method == "POST":
                 return PageResponse.ok(await self._delete_episode(self._body(request)))
+            if request.endpoint == "/audit/list" and request.method == "POST":
+                return PageResponse.ok(await self._list_audit(self._body(request)))
+            if request.endpoint == "/audit/export" and request.method == "POST":
+                return PageResponse.ok(await self._export_audit(self._body(request)))
 
             return PageResponse.fail(f"Unknown endpoint: {request.method} {request.endpoint}")
         except ValueError as exc:
@@ -203,9 +212,21 @@ class MemoryConsolePage(Page):
 
     async def _export_profiles(self, body: dict[str, Any]) -> dict[str, Any]:
         scope_key = self._required_string(body, "scope_key")
+        user_key = self._string(body, "user_key")
         profiles = await self._store.export_profiles_by_scope(scope_key)
+        await self._store.append_audit_entry(
+            scope_key=scope_key,
+            user_key=user_key,
+            operation="export_profiles",
+            target_type="profile",
+            target_id=scope_key,
+            summary=f"Exported {len(profiles)} L1 profile entries from memory console",
+        )
         return {
+            "version": 1,
+            "exported_at": self._now(),
             "scope_key": scope_key,
+            "user_key": user_key,
             "profiles": profiles,
             "count": len(profiles),
         }
@@ -259,8 +280,87 @@ class MemoryConsolePage(Page):
         )
         return {"episodes": episodes, "count": len(episodes)}
 
+    async def _export_episodes(self, body: dict[str, Any]) -> dict[str, Any]:
+        collection_id = self._required_string(body, "collection_id")
+        scope_key = self._required_string(body, "scope_key")
+        user_key = self._required_string(body, "user_key")
+        include_statuses = self._statuses(body)
+
+        exported: list[dict[str, Any]] = []
+        offset = 0
+        page_size = 100
+        while True:
+            episodes, total = await self._store.list_episodes(
+                collection_id=collection_id,
+                user_key=user_key,
+                limit=page_size,
+                offset=offset,
+                include_statuses=include_statuses,
+            )
+            exported.extend(episodes)
+            if not episodes:
+                break
+            offset += len(episodes)
+            if total >= 0 and offset >= total:
+                break
+            if len(episodes) < page_size:
+                break
+
+        await self._store.append_audit_entry(
+            scope_key=scope_key,
+            user_key=user_key,
+            operation="export_l2",
+            target_type="episode",
+            target_id=scope_key,
+            summary=f"Exported {len(exported)} L2 episodes from memory console",
+            metadata={"collection_id": collection_id, "statuses": include_statuses},
+        )
+        return {
+            "version": 1,
+            "exported_at": self._now(),
+            "scope_key": scope_key,
+            "user_key": user_key,
+            "collection_id": collection_id,
+            "statuses": include_statuses or [self._store.EPISODE_STATUS_ACTIVE],
+            "episodes": exported,
+            "count": len(exported),
+        }
+
+    async def _set_episode_status(self, body: dict[str, Any]) -> dict[str, Any]:
+        collection_id = self._required_string(body, "collection_id")
+        embedding_model_uuid = self._required_string(body, "embedding_model_uuid")
+        scope_key = self._required_string(body, "scope_key")
+        user_key = self._required_string(body, "user_key")
+        episode_id = self._required_string(body, "episode_id")
+        status = self._required_string(body, "status").lower()
+        if status not in self._store.EPISODE_STATUSES:
+            raise ValueError("status must be active, superseded, archived, or deleted")
+
+        episode = await self._store.update_episode_status(
+            collection_id=collection_id,
+            embedding_model_uuid=embedding_model_uuid,
+            episode_id=episode_id,
+            user_key=user_key,
+            status=status,
+        )
+        if not episode:
+            raise ValueError(f"episode not found: {episode_id}")
+
+        operation = "restore" if status == self._store.EPISODE_STATUS_ACTIVE else status
+        await self._store.append_audit_entry(
+            scope_key=scope_key,
+            user_key=user_key,
+            operation=operation,
+            target_type="episode",
+            target_id=episode_id,
+            summary=f"Set episode {episode_id} status to {status} from memory console",
+            metadata={"collection_id": collection_id, "status": status},
+        )
+        return {"episode": episode}
+
     async def _delete_episode(self, body: dict[str, Any]) -> dict[str, Any]:
         collection_id = self._required_string(body, "collection_id")
+        scope_key = self._required_string(body, "scope_key")
         user_key = self._required_string(body, "user_key")
         episode_id = self._required_string(body, "episode_id")
         deleted = await self._store.delete_episode_by_id(
@@ -268,4 +368,55 @@ class MemoryConsolePage(Page):
             episode_id=episode_id,
             user_key=user_key,
         )
+        await self._store.append_audit_entry(
+            scope_key=scope_key,
+            user_key=user_key,
+            operation="delete",
+            target_type="episode",
+            target_id=episode_id,
+            summary=f"Deleted episode {episode_id} from memory console",
+            metadata={"collection_id": collection_id, "deleted": deleted},
+        )
         return {"episode_id": episode_id, "deleted": deleted}
+
+    async def _list_audit(self, body: dict[str, Any]) -> dict[str, Any]:
+        scope_key = self._required_string(body, "scope_key")
+        page = self._int(body, "page", 1, 1, 100000)
+        page_size = self._int(body, "page_size", 10, 1, 100)
+        offset = (page - 1) * page_size
+        entries, total = await self._store.list_audit_entries(
+            scope_key,
+            limit=page_size,
+            offset=offset,
+        )
+        return {
+            "entries": entries,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
+
+    async def _export_audit(self, body: dict[str, Any]) -> dict[str, Any]:
+        scope_key = self._required_string(body, "scope_key")
+        user_key = self._string(body, "user_key")
+        entries = await self._store.export_audit_entries(scope_key)
+        await self._store.append_audit_entry(
+            scope_key=scope_key,
+            user_key=user_key,
+            operation="audit_export",
+            target_type="audit",
+            target_id=scope_key,
+            summary=f"Exported {len(entries)} audit entries from memory console",
+        )
+        return {
+            "version": 1,
+            "exported_at": self._now(),
+            "scope_key": scope_key,
+            "user_key": user_key,
+            "entries": entries,
+            "count": len(entries),
+        }
+
+    @staticmethod
+    def _now() -> str:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
