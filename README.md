@@ -172,6 +172,30 @@ So both L1 and L2 enter the model context before answer generation, but in diffe
 - For inspection and debugging, you can use `!memory`, `!memory profile`, `!memory search`, `!memory list`, and `!memory forget`
 - `!memory export` exports only the current scope's L1 profiles for backup or migration
 
+## Memory Write Policy
+
+Write L1 profile memory when the fact is stable, low-frequency, and currently valid:
+
+- names, identities, long-term preferences, communication style
+- durable speaker facts in private chat, such as "Alice prefers concise technical answers"
+- durable group/session conventions, such as "This group coordinates the LangBot release"
+- explicit corrections to current stable facts
+
+Write L2 episodic memory when the fact has time, history, or situational value:
+
+- plans, deadlines, recent status, decisions, and events
+- private chat example: "Alice said her Tokyo flight is next Tuesday"
+- group chat example: "Bob agreed to own the database migration this week"
+- correction history when the timeline matters
+
+Write nothing when the content is not useful or should not be stored:
+
+- one-off greetings, jokes, small talk, or facts only needed for the current answer
+- secrets, credentials, API keys, one-time codes, and private tokens
+- unconfirmed sensitive claims, third-party private gossip, or harmful inferred labels
+
+Correction rule: update L1 for the corrected current fact. If the correction itself is historically important, also write an L2 episode describing the correction. Do not keep contradictory L1 profile values active in parallel.
+
 ## Relationship With AgenticRAG
 
 When AgenticRAG is enabled together with LongTermMemory:
