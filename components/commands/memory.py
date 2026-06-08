@@ -601,12 +601,93 @@ class Memory(Command):
                 return
 
             episode_id = context.crt_params[0].strip()
-            await store.delete_episode_by_id(
+            deleted = await store.delete_episode_by_id(
                 collection_id=ctx.kb_id,
                 episode_id=episode_id,
                 user_key=ctx.user_key,
             )
+            await store.append_audit_entry(
+                scope_key=ctx.session_key,
+                user_key=ctx.user_key,
+                operation="forget",
+                target_type="episode",
+                target_id=episode_id,
+                summary=f"Command deleted episode {episode_id}",
+                sender_id=str(ctx.query_vars.get("sender_id", "") or ""),
+                sender_name=str(ctx.query_vars.get("sender_name", "") or ""),
+                query_id=context.query_id,
+                metadata={"kb_id": ctx.kb_id, "deleted": deleted},
+            )
             yield CommandReturn(text=f"[Memory] Episode {episode_id} deleted.")
+
+        @self.subcommand(
+            name="audit",
+            help="List or export scoped memory audit entries",
+            usage="!memory audit [page|export]",
+            aliases=[],
+        )
+        async def audit_cmd(
+            self: Memory,
+            context: ExecuteContext,
+        ) -> AsyncGenerator[CommandReturn, None]:
+            store = self.plugin.memory_store
+            ctx = await self._build_runtime_context(self.plugin, context)
+
+            if context.crt_params and context.crt_params[0] == "export":
+                entries = await store.export_audit_entries(ctx.session_key)
+                export_data = {
+                    "version": 1,
+                    "exported_at": time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ",
+                        time.gmtime(),
+                    ),
+                    "scope_key": ctx.session_key,
+                    "user_key": ctx.user_key,
+                    "entries": entries,
+                }
+                await store.append_audit_entry(
+                    scope_key=ctx.session_key,
+                    user_key=ctx.user_key,
+                    operation="audit_export",
+                    target_type="audit",
+                    target_id=ctx.session_key,
+                    summary=f"Exported {len(entries)} audit entries",
+                    sender_id=str(ctx.query_vars.get("sender_id", "") or ""),
+                    sender_name=str(ctx.query_vars.get("sender_name", "") or ""),
+                    query_id=context.query_id,
+                )
+                yield CommandReturn(
+                    text=json.dumps(export_data, ensure_ascii=False, indent=2)
+                )
+                return
+
+            page = 1
+            if context.crt_params:
+                try:
+                    page = max(1, int(context.crt_params[0]))
+                except ValueError:
+                    yield CommandReturn(text="Usage: !memory audit [page|export]")
+                    return
+
+            page_size = 10
+            offset = (page - 1) * page_size
+            entries, total = await store.list_audit_entries(
+                ctx.session_key,
+                limit=page_size,
+                offset=offset,
+            )
+            if not entries:
+                yield CommandReturn(text="[Memory] No audit entries found.")
+                return
+
+            lines = [f"[Memory Audit] page {page}, {total} total"]
+            for entry in entries:
+                ts = str(entry.get("timestamp", ""))[:19] or "?"
+                operation = entry.get("operation", "-")
+                target = entry.get("target_id", "-")
+                summary = entry.get("summary", "")
+                lines.append(f"  {ts} {operation} {target}: {summary}")
+            yield CommandReturn(text="\n".join(lines))
 
         @self.subcommand(
             name="export",
@@ -634,6 +715,17 @@ class Memory(Command):
                 ),
                 "profiles": profiles,
             }
+            await store.append_audit_entry(
+                scope_key=ctx.session_key,
+                user_key=ctx.user_key,
+                operation="export_profiles",
+                target_type="profile",
+                target_id=ctx.session_key,
+                summary=f"Exported {len(profiles)} L1 profile entries",
+                sender_id=str(ctx.query_vars.get("sender_id", "") or ""),
+                sender_name=str(ctx.query_vars.get("sender_name", "") or ""),
+                query_id=context.query_id,
+            )
 
             yield CommandReturn(
                 text=json.dumps(export_data, ensure_ascii=False, indent=2)

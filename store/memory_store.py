@@ -41,6 +41,7 @@ class MemoryStore:
     _MAX_NOTES_LENGTH = 2000
     _MAX_SLOT_HISTORY = 8
     _RECENT_SLOT_CHANGE_DAYS = 30
+    _MAX_AUDIT_ENTRIES_PER_SCOPE = 1000
     EPISODE_STATUS_ACTIVE = "active"
     EPISODE_STATUS_SUPERSEDED = "superseded"
     EPISODE_STATUS_ARCHIVED = "archived"
@@ -615,6 +616,10 @@ class MemoryStore:
     def _speaker_profile_key(self, scope_key: str, sender_id: str) -> str:
         return f"pp:{scope_key}:{sender_id}"
 
+    @staticmethod
+    def _audit_key(scope_key: str) -> str:
+        return f"audit:{scope_key}"
+
     async def _read_json(self, key: str) -> Any:
         try:
             data = await self.plugin.get_plugin_storage(key)
@@ -632,6 +637,62 @@ class MemoryStore:
     async def _write_json(self, key: str, obj: Any) -> None:
         data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         await self.plugin.set_plugin_storage(key, data)
+
+    async def append_audit_entry(
+        self,
+        scope_key: str,
+        operation: str,
+        target_type: str,
+        target_id: str,
+        summary: str,
+        *,
+        user_key: str = "",
+        sender_id: str = "",
+        sender_name: str = "",
+        query_id: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Append a scoped audit entry to plugin storage."""
+        entry = {
+            "audit_id": uuid.uuid4().hex[:12],
+            "operation": operation,
+            "scope_key": scope_key,
+            "user_key": user_key,
+            "sender_id": sender_id,
+            "sender_name": sender_name,
+            "target_type": target_type,
+            "target_id": target_id,
+            "summary": self._preview_text(summary, 240),
+            "timestamp": self._now_timestamp(),
+            "query_id": query_id,
+            "metadata": metadata or {},
+        }
+        key = self._audit_key(scope_key)
+        entries = await self._read_json(key)
+        if not isinstance(entries, list):
+            entries = []
+        entries.append(entry)
+        entries = entries[-self._MAX_AUDIT_ENTRIES_PER_SCOPE:]
+        await self._write_json(key, entries)
+        return entry
+
+    async def list_audit_entries(
+        self,
+        scope_key: str,
+        limit: int = 10,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        entries = await self._read_json(self._audit_key(scope_key))
+        if not isinstance(entries, list):
+            entries = []
+        ordered = list(reversed(entries))
+        return ordered[offset: offset + limit], len(ordered)
+
+    async def export_audit_entries(self, scope_key: str) -> list[dict[str, Any]]:
+        entries = await self._read_json(self._audit_key(scope_key))
+        if not isinstance(entries, list):
+            return []
+        return list(entries)
 
     def _get_cached_profile(self, storage_key: str) -> dict[str, Any] | None:
         now = time.monotonic()

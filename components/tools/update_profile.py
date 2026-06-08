@@ -101,8 +101,9 @@ class UpdateProfile(Tool):
         bot_uuid = await api.get_bot_uuid()
         query_vars = await api.get_query_vars()
         sender_id = str(query_vars.get("sender_id", "") or "")
+        sender_name = str(query_vars.get("sender_name", "") or "")
 
-        session_key, _user_key, kb_id, _isolation, _ = await store.resolve_user_context(
+        session_key, user_key, kb_id, _isolation, _ = await store.resolve_user_context(
             session, bot_uuid
         )
         if not kb_id:
@@ -151,6 +152,28 @@ class UpdateProfile(Tool):
             field,
             action,
             session_key,
+        )
+        target_id = session_key if target_scope == "session" else f"{session_key}:{sender_id}"
+        await store.append_audit_entry(
+            scope_key=session_key,
+            user_key=user_key,
+            operation="update_profile",
+            target_type=f"{target_scope}_profile",
+            target_id=target_id,
+            summary=(
+                f"{action} {target_scope} profile {field}"
+                f"{f' ({fact_key})' if fact_key else ''}: {self._preview_text(str(value))}"
+            ),
+            sender_id=sender_id,
+            sender_name=sender_name,
+            query_id=query_id,
+            metadata={
+                "field": field,
+                "action": action,
+                "target_scope": target_scope,
+                "fact_key": fact_key,
+                "has_previous_value": bool(previous_value),
+            },
         )
 
         return (

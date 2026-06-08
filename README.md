@@ -19,6 +19,7 @@ Long-term memory plugin for LangBot with a dual-layer design:
 - Provides `!memory search <query>` to search episodes (results include episode IDs)
 - Provides `!memory health` to verify KB configuration and metadata-filter isolation
 - Provides a `!memory export` command to export L1 profiles for the current session as JSON
+- Provides `!memory audit [page|export]` to inspect scoped memory change history
 - Automatically supersedes related older episodes when a correction/fact-update/clarification is stored
 
 ## Overall Design
@@ -276,6 +277,12 @@ L2 episodes carry a lifecycle `status` metadata field:
 - `deleted`: reserved for tombstones or future audit workflows
 
 Existing records without `status` are treated as `active`, so no migration is required. Automatic recall and `recall_memory` only return active episodes by default. Correction-style writes mark similar older active episodes as `superseded`, which keeps them inspectable through explicit management commands without letting them compete with current memory.
+
+## Audit Log
+
+Memory-changing operations write scoped audit entries to plugin storage, not to the L2 vector database. Audit entries include the operation, target, scope key, user key, sender identity when available, timestamp, query id, and a short summary.
+
+Use `!memory audit [page]` to inspect recent entries for the current scope, or `!memory audit export` to export only the current scope's audit log as JSON.
 
 ## Context Sharing for Other Plugins
 
