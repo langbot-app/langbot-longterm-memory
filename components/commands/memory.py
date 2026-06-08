@@ -1240,6 +1240,161 @@ class Memory(Command):
                 )
             )
 
+        @self.subcommand(
+            name="candidates",
+            help="List scoped memory candidates",
+            usage="!memory candidates [--all-statuses|--status <pending|accepted|rejected>] [page]",
+            aliases=[],
+        )
+        async def candidates_cmd(
+            self: Memory,
+            context: ExecuteContext,
+        ) -> AsyncGenerator[CommandReturn, None]:
+            store = self.plugin.memory_store
+            ctx = await self._build_runtime_context(self.plugin, context)
+            include_statuses = [store.CANDIDATE_STATUS_PENDING]
+            remaining: list[str] = []
+            index = 0
+            while index < len(context.crt_params):
+                value = context.crt_params[index]
+                if value == "--all-statuses":
+                    include_statuses = sorted(store.CANDIDATE_STATUSES)
+                    index += 1
+                    continue
+                if value == "--status":
+                    if index + 1 >= len(context.crt_params):
+                        yield CommandReturn(text="Usage: --status <pending|accepted|rejected>")
+                        return
+                    status = context.crt_params[index + 1].strip().lower()
+                    if status not in store.CANDIDATE_STATUSES:
+                        yield CommandReturn(text="status must be pending, accepted, or rejected")
+                        return
+                    include_statuses = [status]
+                    index += 2
+                    continue
+                remaining.append(value)
+                index += 1
+
+            page = 1
+            if remaining:
+                try:
+                    page = max(1, int(remaining[0]))
+                except ValueError:
+                    yield CommandReturn(text="Usage: !memory candidates [page]")
+                    return
+                if len(remaining) > 1:
+                    yield CommandReturn(text="Usage: !memory candidates [page]")
+                    return
+
+            page_size = 10
+            entries, total = await store.list_memory_candidates(
+                ctx.session_key,
+                limit=page_size,
+                offset=(page - 1) * page_size,
+                include_statuses=include_statuses,
+            )
+            if not entries:
+                yield CommandReturn(text="[Memory] No memory candidates found.")
+                return
+
+            lines = [f"[Memory Candidates] page {page}, {total} total"]
+            for entry in entries:
+                payload = entry.get("payload", {})
+                text = payload.get("content") or payload.get("value") or entry.get("reason", "")
+                lines.append(
+                    f"  [{entry.get('candidate_id')}] {entry.get('status')} "
+                    f"{entry.get('candidate_type')}: {store._preview_text(str(text), 100)}"
+                )
+            yield CommandReturn(text="\n".join(lines))
+
+        @self.subcommand(
+            name="candidate",
+            help="Accept or reject a scoped memory candidate",
+            usage="!memory candidate accept|reject <candidate_id>",
+            aliases=[],
+        )
+        async def candidate_cmd(
+            self: Memory,
+            context: ExecuteContext,
+        ) -> AsyncGenerator[CommandReturn, None]:
+            store = self.plugin.memory_store
+            ctx = await self._build_runtime_context(self.plugin, context)
+
+            if len(context.crt_params) != 2 or context.crt_params[0] not in {"accept", "reject"}:
+                yield CommandReturn(text="Usage: !memory candidate accept|reject <candidate_id>")
+                return
+
+            action = context.crt_params[0]
+            candidate_id = context.crt_params[1].strip()
+            if action == "reject":
+                candidate = await store.reject_memory_candidate(ctx.session_key, candidate_id)
+                if not candidate:
+                    yield CommandReturn(text=f"[Memory] Candidate {candidate_id} not found.")
+                    return
+                await store.append_audit_entry(
+                    scope_key=ctx.session_key,
+                    user_key=ctx.user_key,
+                    operation="candidate_reject",
+                    target_type="candidate",
+                    target_id=candidate_id,
+                    summary=f"Rejected memory candidate {candidate_id}",
+                    sender_id=str(ctx.query_vars.get("sender_id", "") or ""),
+                    sender_name=str(ctx.query_vars.get("sender_name", "") or ""),
+                    query_id=context.query_id,
+                )
+                yield CommandReturn(text=f"[Memory] Candidate {candidate_id} rejected.")
+                return
+
+            candidate_preview = await store.get_memory_candidate(
+                ctx.session_key,
+                candidate_id,
+            )
+            if not candidate_preview:
+                yield CommandReturn(text=f"[Memory] Candidate {candidate_id} not found.")
+                return
+
+            needs_l2_write = candidate_preview.get("candidate_type") == "l2_episode"
+            if needs_l2_write and (
+                not ctx.kb_id
+                or not await self._is_memory_kb_active(store, ctx.api, ctx.kb_id)
+            ):
+                yield CommandReturn(
+                    text="[Memory] Memory knowledge base is not configured for the current pipeline."
+                )
+                return
+            embedding_model_uuid = str(ctx.config.get("embedding_model_uuid", "") or "")
+            if needs_l2_write and not embedding_model_uuid:
+                yield CommandReturn(text="[Memory] No embedding model configured.")
+                return
+            try:
+                candidate = await store.accept_memory_candidate(
+                    ctx.session_key,
+                    candidate_id,
+                    collection_id=ctx.kb_id or "",
+                    embedding_model_uuid=embedding_model_uuid,
+                    user_key=ctx.user_key,
+                    bot_uuid=ctx.bot_uuid,
+                )
+            except ValueError as exc:
+                yield CommandReturn(text=str(exc))
+                return
+            if not candidate:
+                yield CommandReturn(text=f"[Memory] Candidate {candidate_id} not found.")
+                return
+            await store.append_audit_entry(
+                scope_key=ctx.session_key,
+                user_key=ctx.user_key,
+                operation="candidate_accept",
+                target_type="candidate",
+                target_id=candidate_id,
+                summary=f"Accepted memory candidate {candidate_id}",
+                sender_id=str(ctx.query_vars.get("sender_id", "") or ""),
+                sender_name=str(ctx.query_vars.get("sender_name", "") or ""),
+                query_id=context.query_id,
+                metadata={"candidate": candidate},
+            )
+            yield CommandReturn(text=f"[Memory] Candidate {candidate_id} accepted.")
+
     async def _list_by_status(
         self,
         context: ExecuteContext,
