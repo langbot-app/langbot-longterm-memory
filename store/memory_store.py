@@ -41,6 +41,16 @@ class MemoryStore:
     _MAX_NOTES_LENGTH = 2000
     _MAX_SLOT_HISTORY = 8
     _RECENT_SLOT_CHANGE_DAYS = 30
+    EPISODE_STATUS_ACTIVE = "active"
+    EPISODE_STATUS_SUPERSEDED = "superseded"
+    EPISODE_STATUS_ARCHIVED = "archived"
+    EPISODE_STATUS_DELETED = "deleted"
+    EPISODE_STATUSES = {
+        EPISODE_STATUS_ACTIVE,
+        EPISODE_STATUS_SUPERSEDED,
+        EPISODE_STATUS_ARCHIVED,
+        EPISODE_STATUS_DELETED,
+    }
 
     def __init__(
         self,
@@ -62,6 +72,39 @@ class MemoryStore:
         if len(text) <= max_len:
             return text
         return f"{text[:max_len]}..."
+
+    @classmethod
+    def normalize_episode_status_value(cls, value: Any) -> str:
+        status = str(value or "").strip().lower()
+        if status in cls.EPISODE_STATUSES:
+            return status
+        return cls.EPISODE_STATUS_ACTIVE
+
+    @classmethod
+    def episode_status_from_metadata(cls, metadata: dict[str, Any]) -> str:
+        return cls.normalize_episode_status_value(metadata.get("status", ""))
+
+    @classmethod
+    def normalize_episode_statuses(
+        cls,
+        include_statuses: list[str] | set[str] | tuple[str, ...] | None,
+    ) -> set[str]:
+        if include_statuses is None:
+            return {cls.EPISODE_STATUS_ACTIVE}
+        statuses = {
+            cls.normalize_episode_status_value(status)
+            for status in include_statuses
+        }
+        return statuses or {cls.EPISODE_STATUS_ACTIVE}
+
+    @classmethod
+    def episode_status_included(
+        cls,
+        metadata: dict[str, Any],
+        include_statuses: list[str] | set[str] | tuple[str, ...] | None = None,
+    ) -> bool:
+        statuses = cls.normalize_episode_statuses(include_statuses)
+        return cls.episode_status_from_metadata(metadata) in statuses
 
     # ======================== common helpers ========================
 
@@ -829,6 +872,7 @@ class MemoryStore:
         Superseding means re-upserting the old vector with:
         - importance reduced by _SUPERSEDE_IMPORTANCE_FACTOR
         - 'superseded_by' metadata field set to new_episode_id
+        - 'status' metadata field set to 'superseded'
 
         Returns the number of superseded episodes.
         """
@@ -847,7 +891,11 @@ class MemoryStore:
                 continue
             meta = r.get("metadata", {})
             # Already superseded — skip
-            if meta.get("superseded_by"):
+            if (
+                meta.get("superseded_by")
+                or self.episode_status_from_metadata(meta)
+                != self.EPISODE_STATUS_ACTIVE
+            ):
                 continue
 
             # Check similarity: distance is cosine distance (lower = more similar)
@@ -858,15 +906,22 @@ class MemoryStore:
 
             # Re-upsert with reduced importance and superseded_by marker
             old_importance = int(meta.get("importance", "2"))
-            new_importance = max(1, int(old_importance * self._SUPERSEDE_IMPORTANCE_FACTOR))
+            new_importance = max(
+                1,
+                int(old_importance * self._SUPERSEDE_IMPORTANCE_FACTOR),
+            )
             meta["importance"] = str(new_importance)
             meta["superseded_by"] = new_episode_id
+            meta["status"] = self.EPISODE_STATUS_SUPERSEDED
 
             # We need the original vector; re-embed from content
             old_content = meta.get("content", "")
             if not old_content:
                 continue
-            old_vectors = await self.plugin.invoke_embedding(embedding_model_uuid, [old_content])
+            old_vectors = await self.plugin.invoke_embedding(
+                embedding_model_uuid,
+                [old_content],
+            )
 
             await self.plugin.vector_upsert(
                 collection_id=collection_id,
@@ -925,6 +980,7 @@ class MemoryStore:
             "sender_id": sender_id,
             "sender_name": sender_name,
             "bot_uuid": bot_uuid,
+            "status": self.EPISODE_STATUS_ACTIVE,
         }
 
         vectors = await self.plugin.invoke_embedding(embedding_model_uuid, [content])
@@ -970,6 +1026,7 @@ class MemoryStore:
             "tags": tags,
             "importance": importance,
             "timestamp": timestamp,
+            "status": self.EPISODE_STATUS_ACTIVE,
         }
 
     async def search_episodes(
@@ -985,12 +1042,13 @@ class MemoryStore:
         time_before: str = "",
         importance_min: int | None = None,
         source: str = "",
+        include_statuses: list[str] | set[str] | tuple[str, ...] | None = None,
     ) -> list[dict[str, Any]]:
         """Search episodic memories via vector similarity."""
         if not query.strip():
             return []
         logger.info(
-            "[LongTermMemory] search_episodes: collection_id=%s user_key=%s sender_id=%s sender_name=%s top_k=%s source=%s importance_min=%s time_after=%s time_before=%s query_len=%s",
+            "[LongTermMemory] search_episodes: collection_id=%s user_key=%s sender_id=%s sender_name=%s top_k=%s source=%s importance_min=%s time_after=%s time_before=%s statuses=%s query_len=%s",
             collection_id,
             user_key,
             sender_id,
@@ -1000,6 +1058,7 @@ class MemoryStore:
             importance_min,
             time_after,
             time_before,
+            sorted(self.normalize_episode_statuses(include_statuses)),
             len(query),
         )
 
@@ -1031,14 +1090,15 @@ class MemoryStore:
         if len(filters) > 1:
             filters = {"$and": [{k: v} for k, v in filters.items()]}
 
+        fetch_k = max(top_k, top_k * 4, 50)
         results = await self.plugin.vector_search(
             collection_id=collection_id,
             query_vector=query_vector,
-            top_k=top_k,
+            top_k=fetch_k,
             filters=filters if filters else None,
         )
         logger.info(
-            "[LongTermMemory] search_episodes completed: collection_id=%s result_count=%s filters=%s",
+            "[LongTermMemory] search_episodes completed: collection_id=%s raw_result_count=%s filters=%s",
             collection_id,
             len(results),
             filters if filters else None,
@@ -1047,6 +1107,8 @@ class MemoryStore:
         episodes = []
         for r in results:
             meta = r.get("metadata", {})
+            if not self.episode_status_included(meta, include_statuses):
+                continue
             episodes.append({
                 "id": r.get("id", ""),
                 "content": meta.get("content", ""),
@@ -1056,8 +1118,12 @@ class MemoryStore:
                 "sender_id": meta.get("sender_id", ""),
                 "sender_name": meta.get("sender_name", ""),
                 "source": meta.get("source", ""),
+                "status": self.episode_status_from_metadata(meta),
+                "superseded_by": meta.get("superseded_by", ""),
                 "score": r.get("score"),
             })
+            if len(episodes) >= top_k:
+                break
         return episodes
 
     async def delete_episodes_by_user(
@@ -1075,6 +1141,7 @@ class MemoryStore:
         user_key: str,
         limit: int = 20,
         offset: int = 0,
+        include_statuses: list[str] | set[str] | tuple[str, ...] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """List episodic memories for a user with pagination.
 
@@ -1082,29 +1149,54 @@ class MemoryStore:
             Tuple of (episodes, total).
         """
         filters: dict[str, Any] = {"user_key": user_key}
-        result = await self.plugin.vector_list(
-            collection_id=collection_id,
-            filters=filters,
-            limit=limit,
-            offset=offset,
-        )
-        items = result.get("items", [])
-        total = result.get("total", -1)
+        target_count = offset + limit
+        batch_size = max(limit * 4, 50)
+        raw_offset = 0
+        raw_total = -1
+        scanned_all = False
+        included: list[dict[str, Any]] = []
 
-        episodes = []
-        for item in items:
-            meta = item.get("metadata", {})
-            episodes.append({
-                "id": item.get("id", ""),
-                "content": meta.get("content", "") or item.get("document", ""),
-                "tags": meta.get("tags", "").split(",") if meta.get("tags") else [],
-                "importance": int(meta.get("importance", "2")),
-                "timestamp": meta.get("timestamp", ""),
-                "sender_id": meta.get("sender_id", ""),
-                "sender_name": meta.get("sender_name", ""),
-                "source": meta.get("source", ""),
-            })
-        return episodes, total
+        while len(included) < target_count:
+            result = await self.plugin.vector_list(
+                collection_id=collection_id,
+                filters=filters,
+                limit=batch_size,
+                offset=raw_offset,
+            )
+            items = result.get("items", [])
+            raw_total = result.get("total", raw_total)
+            if not items:
+                scanned_all = True
+                break
+
+            for item in items:
+                meta = item.get("metadata", {})
+                if not self.episode_status_included(meta, include_statuses):
+                    continue
+                included.append({
+                    "id": item.get("id", ""),
+                    "content": meta.get("content", "") or item.get("document", ""),
+                    "tags": meta.get("tags", "").split(",") if meta.get("tags") else [],
+                    "importance": int(meta.get("importance", "2")),
+                    "timestamp": meta.get("timestamp", ""),
+                    "sender_id": meta.get("sender_id", ""),
+                    "sender_name": meta.get("sender_name", ""),
+                    "source": meta.get("source", ""),
+                    "status": self.episode_status_from_metadata(meta),
+                    "superseded_by": meta.get("superseded_by", ""),
+                })
+
+            raw_offset += len(items)
+            if raw_total >= 0 and raw_offset >= raw_total:
+                scanned_all = True
+                break
+            if len(items) < batch_size:
+                scanned_all = True
+                break
+
+        episodes = included[offset:target_count]
+        filtered_total = len(included) if scanned_all else -1
+        return episodes, filtered_total
 
     async def delete_episode_by_id(
         self,

@@ -43,6 +43,52 @@ class Memory(Command):
         return f"- {status}: {detail}"
 
     @staticmethod
+    def _parse_status_options(
+        store,
+        params: list[str],
+    ) -> tuple[list[str] | None, list[str]]:
+        include_statuses = [store.EPISODE_STATUS_ACTIVE]
+        remaining: list[str] = []
+        index = 0
+        while index < len(params):
+            value = params[index]
+            if value == "--include-superseded":
+                if store.EPISODE_STATUS_SUPERSEDED not in include_statuses:
+                    include_statuses.append(store.EPISODE_STATUS_SUPERSEDED)
+                index += 1
+                continue
+            if value == "--include-archived":
+                if store.EPISODE_STATUS_ARCHIVED not in include_statuses:
+                    include_statuses.append(store.EPISODE_STATUS_ARCHIVED)
+                index += 1
+                continue
+            if value == "--include-deleted":
+                if store.EPISODE_STATUS_DELETED not in include_statuses:
+                    include_statuses.append(store.EPISODE_STATUS_DELETED)
+                index += 1
+                continue
+            if value == "--all-statuses":
+                include_statuses = sorted(store.EPISODE_STATUSES)
+                index += 1
+                continue
+            if value == "--status":
+                if index + 1 >= len(params):
+                    raise ValueError(
+                        "Usage: --status <active|superseded|archived|deleted>"
+                    )
+                status = str(params[index + 1]).strip().lower()
+                if status not in store.EPISODE_STATUSES:
+                    raise ValueError(
+                        "status must be one of: active, superseded, archived, deleted"
+                    )
+                include_statuses = [status]
+                index += 2
+                continue
+            remaining.append(value)
+            index += 1
+        return include_statuses, remaining
+
+    @staticmethod
     async def _build_runtime_context(
         plugin,
         context: ExecuteContext,
@@ -401,7 +447,7 @@ class Memory(Command):
         @self.subcommand(
             name="search",
             help="Search episodic memories",
-            usage="!memory search <query>",
+            usage="!memory search [--include-superseded] [--include-archived] [--status <status>] <query>",
             aliases=["s"],
         )
         async def search_cmd(
@@ -419,11 +465,20 @@ class Memory(Command):
 
             embedding_model_uuid = ctx.config.get("embedding_model_uuid", "")
 
-            if not context.crt_params:
+            try:
+                include_statuses, query_parts = self._parse_status_options(
+                    store,
+                    context.crt_params,
+                )
+            except ValueError as exc:
+                yield CommandReturn(text=str(exc))
+                return
+
+            if not query_parts:
                 yield CommandReturn(text="Usage: !memory search <query>")
                 return
 
-            query = " ".join(context.crt_params)
+            query = " ".join(query_parts)
 
             episodes = await store.search_episodes(
                 collection_id=ctx.kb_id,
@@ -431,6 +486,7 @@ class Memory(Command):
                 query=query,
                 user_key=ctx.user_key,
                 top_k=10,
+                include_statuses=include_statuses,
             )
 
             if not episodes:
@@ -441,17 +497,20 @@ class Memory(Command):
             for ep in episodes:
                 ts = ep["timestamp"][:10] if ep.get("timestamp") else "?"
                 imp = ep.get("importance", 2)
+                status = ep.get("status", "active")
                 tags = ", ".join(ep.get("tags", []))
                 tag_str = f" [{tags}]" if tags else ""
                 eid = ep.get("id", "?")
-                lines.append(f"  [{eid}] {ts} (imp:{imp}){tag_str} {ep['content']}")
+                lines.append(
+                    f"  [{eid}] {ts} ({status}, imp:{imp}){tag_str} {ep['content']}"
+                )
 
             yield CommandReturn(text="\n".join(lines))
 
         @self.subcommand(
             name="list",
             help="List episodic memories with pagination",
-            usage="!memory list [page]",
+            usage="!memory list [--include-superseded] [--include-archived] [--status <status>] [page]",
             aliases=["l", "ls"],
         )
         async def list_cmd(
@@ -468,10 +527,22 @@ class Memory(Command):
                 return
 
             page = 1
-            if context.crt_params:
+            try:
+                include_statuses, remaining = self._parse_status_options(
+                    store,
+                    context.crt_params,
+                )
+            except ValueError as exc:
+                yield CommandReturn(text=str(exc))
+                return
+
+            if remaining:
                 try:
-                    page = max(1, int(context.crt_params[0]))
+                    page = max(1, int(remaining[0]))
                 except ValueError:
+                    yield CommandReturn(text="Usage: !memory list [page]")
+                    return
+                if len(remaining) > 1:
                     yield CommandReturn(text="Usage: !memory list [page]")
                     return
 
@@ -483,6 +554,7 @@ class Memory(Command):
                 user_key=ctx.user_key,
                 limit=page_size,
                 offset=offset,
+                include_statuses=include_statuses,
             )
 
             if not episodes:
@@ -494,11 +566,14 @@ class Memory(Command):
             for ep in episodes:
                 ts = ep["timestamp"][:10] if ep.get("timestamp") else "?"
                 imp = ep.get("importance", 2)
+                status = ep.get("status", "active")
                 tags = ", ".join(ep.get("tags", []))
                 tag_str = f" [{tags}]" if tags else ""
                 eid = ep.get("id", "?")
                 content_preview = store._preview_text(ep.get("content", ""), 80)
-                lines.append(f"  [{eid}] {ts} (imp:{imp}){tag_str} {content_preview}")
+                lines.append(
+                    f"  [{eid}] {ts} ({status}, imp:{imp}){tag_str} {content_preview}"
+                )
 
             yield CommandReturn(text="\n".join(lines))
 

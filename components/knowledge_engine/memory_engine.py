@@ -217,6 +217,8 @@ class LongTermMemoryEngine(KnowledgeEngine):
                 item_id = item.get("id", "")
                 if item_id and item_id in seen_ids:
                     continue
+                if not store.episode_status_included(item.get("metadata", {})):
+                    continue
                 if item_id:
                     seen_ids.add(item_id)
                 results.append(item)
@@ -392,6 +394,9 @@ class LongTermMemoryEngine(KnowledgeEngine):
                     error_message=str(exc),
                 )
             user_key = mem.get("user_key", "imported")
+            status = self.plugin.memory_store.normalize_episode_status_value(
+                mem.get("status", "active")
+            )
 
             mid = uuid_mod.uuid4().hex[:12]
             batch_texts.append(content)
@@ -404,6 +409,7 @@ class LongTermMemoryEngine(KnowledgeEngine):
                 "user_key": user_key,
                 "source": "import",
                 "document_id": doc_id,
+                "status": status,
             })
 
             if len(batch_texts) >= EMBEDDING_BATCH_SIZE:

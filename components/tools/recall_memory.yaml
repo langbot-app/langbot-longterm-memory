@@ -37,6 +37,14 @@ spec:
       source:
         type: string
         description: Optional source filter, for example "agent" or "import".
+      status:
+        type: string
+        enum:
+          - active
+          - superseded
+          - archived
+          - deleted
+        description: Optional lifecycle status filter. Default is "active"; only use other values when explicitly inspecting old or hidden memories.
     required:
       - query
 
@@ -56,9 +64,11 @@ spec:
     - time_before
     - importance_min
     - source
+    - status
 
     Important behavior:
     - These filters narrow results rather than broaden them.
+    - By default, recall only returns active memories. Use status=superseded or status=archived only when the user asks to inspect older hidden records.
     - When multiple filters are provided together, they are typically combined as restrictive conditions.
     - Do not add filters unless they are clearly needed.
     - Start with only the semantic query whenever possible, then add at most one or two filters if you need to narrow the result set.

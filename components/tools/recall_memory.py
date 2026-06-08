@@ -89,6 +89,15 @@ class RecallMemory(Tool):
         if not isinstance(source, str):
             return "Error: source must be a string."
 
+        status = params.get("status", "active")
+        if status is None:
+            status = "active"
+        if not isinstance(status, str):
+            return "Error: status must be a string."
+        status = status.strip().lower() or "active"
+        if status not in store.EPISODE_STATUSES:
+            return "Error: status must be one of active, superseded, archived, or deleted."
+
         importance_min = params.get("importance_min")
         if importance_min is not None and (
             not isinstance(importance_min, int) or importance_min < 1 or importance_min > 5
@@ -96,7 +105,7 @@ class RecallMemory(Tool):
             return "Error: importance_min must be an integer between 1 and 5."
 
         logger.info(
-            "[LongTermMemory] recall_memory searching: query_id=%s kb_id=%s user_key=%s top_k=%s speaker_id=%s speaker_name=%s source=%s importance_min=%s time_after=%s time_before=%s query_len=%s",
+            "[LongTermMemory] recall_memory searching: query_id=%s kb_id=%s user_key=%s top_k=%s speaker_id=%s speaker_name=%s source=%s status=%s importance_min=%s time_after=%s time_before=%s query_len=%s",
             query_id,
             kb_id,
             user_key,
@@ -104,6 +113,7 @@ class RecallMemory(Tool):
             speaker_id.strip(),
             speaker_name.strip(),
             source.strip(),
+            status,
             importance_min,
             time_after.strip(),
             time_before.strip(),
@@ -122,6 +132,7 @@ class RecallMemory(Tool):
                 time_before=time_before.strip(),
                 importance_min=importance_min,
                 source=source.strip(),
+                include_statuses=[status],
             )
         except ValueError as exc:
             return f"Error: {exc}"
