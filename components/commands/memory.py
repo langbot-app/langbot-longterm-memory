@@ -105,6 +105,86 @@ class Memory(Command):
         return include_statuses, remaining
 
     @staticmethod
+    def _parse_l2_delete_options(store, params: list[str]) -> dict:
+        if not params:
+            raise ValueError(
+                "Usage: !memory delete --speaker <sender_id> | --tag <tag> | "
+                "--before <timestamp> | --status <status>"
+            )
+
+        options = {
+            "sender_id": "",
+            "tag": "",
+            "before": "",
+            "include_statuses": None,
+        }
+        index = 0
+        used_filter = False
+        while index < len(params):
+            value = params[index]
+            if value == "--speaker":
+                if index + 1 >= len(params):
+                    raise ValueError("Usage: --speaker <sender_id>")
+                options["sender_id"] = params[index + 1].strip()
+                used_filter = True
+                index += 2
+                continue
+            if value == "--tag":
+                if index + 1 >= len(params):
+                    raise ValueError("Usage: --tag <tag>")
+                options["tag"] = params[index + 1].strip()
+                used_filter = True
+                index += 2
+                continue
+            if value == "--before":
+                if index + 1 >= len(params):
+                    raise ValueError("Usage: --before <timestamp>")
+                options["before"] = params[index + 1].strip()
+                used_filter = True
+                index += 2
+                continue
+            if value == "--status":
+                if index + 1 >= len(params):
+                    raise ValueError("Usage: --status <active|superseded|archived|deleted>")
+                status = params[index + 1].strip().lower()
+                if status not in store.EPISODE_STATUSES:
+                    raise ValueError(
+                        "status must be one of: active, superseded, archived, deleted"
+                    )
+                options["include_statuses"] = [status]
+                used_filter = True
+                index += 2
+                continue
+            raise ValueError(
+                "Usage: !memory delete --speaker <sender_id> | --tag <tag> | "
+                "--before <timestamp> | --status <status>"
+            )
+
+        if not used_filter:
+            raise ValueError("At least one deletion filter is required.")
+        return options
+
+    @staticmethod
+    def _extract_l2_import_payload(params: list[str]) -> list[dict]:
+        if not params:
+            raise ValueError("Usage: !memory import l2 <json>")
+        try:
+            payload = json.loads(" ".join(params))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON: {exc}") from exc
+
+        if isinstance(payload, dict) and isinstance(payload.get("episodes"), list):
+            episodes = payload["episodes"]
+        elif isinstance(payload, list):
+            episodes = payload
+        else:
+            raise ValueError("L2 import JSON must be a list or an object with episodes.")
+
+        if not all(isinstance(item, dict) for item in episodes):
+            raise ValueError("Each imported episode must be an object.")
+        return episodes
+
+    @staticmethod
     async def _build_runtime_context(
         plugin,
         context: ExecuteContext,
@@ -808,8 +888,8 @@ class Memory(Command):
 
         @self.subcommand(
             name="export",
-            help="Export L1 profiles for the current session",
-            usage="!memory export",
+            help="Export L1 profiles or L2 episodes for the current session",
+            usage="!memory export [l2] [--include-superseded] [--include-archived] [--status <status>]",
             aliases=["e"],
         )
         async def export_cmd(
@@ -818,6 +898,65 @@ class Memory(Command):
         ) -> AsyncGenerator[CommandReturn, None]:
             store = self.plugin.memory_store
             ctx = await self._build_runtime_context(self.plugin, context)
+
+            if context.crt_params and context.crt_params[0] == "l2":
+                if not ctx.kb_id or not await self._is_memory_kb_active(store, ctx.api, ctx.kb_id):
+                    yield CommandReturn(
+                        text="[Memory] Memory knowledge base is not configured for the current pipeline."
+                    )
+                    return
+                try:
+                    include_statuses, remaining = self._parse_status_options(
+                        store,
+                        context.crt_params[1:],
+                    )
+                except ValueError as exc:
+                    yield CommandReturn(text=str(exc))
+                    return
+                if remaining:
+                    yield CommandReturn(text="Usage: !memory export l2 [--status <status>]")
+                    return
+                if not context.crt_params[1:]:
+                    include_statuses = sorted(store.EPISODE_STATUSES)
+
+                episodes = await store.export_episodes_by_user(
+                    collection_id=ctx.kb_id,
+                    user_key=ctx.user_key,
+                    include_statuses=include_statuses,
+                )
+                export_data = {
+                    "version": 1,
+                    "exported_at": time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ",
+                        time.gmtime(),
+                    ),
+                    "scope_key": ctx.session_key,
+                    "user_key": ctx.user_key,
+                    "collection_id": ctx.kb_id,
+                    "statuses": include_statuses,
+                    "episodes": episodes,
+                    "count": len(episodes),
+                }
+                await store.append_audit_entry(
+                    scope_key=ctx.session_key,
+                    user_key=ctx.user_key,
+                    operation="export_l2",
+                    target_type="episode",
+                    target_id=ctx.session_key,
+                    summary=f"Exported {len(episodes)} L2 episodes",
+                    sender_id=str(ctx.query_vars.get("sender_id", "") or ""),
+                    sender_name=str(ctx.query_vars.get("sender_name", "") or ""),
+                    query_id=context.query_id,
+                    metadata={"kb_id": ctx.kb_id, "statuses": include_statuses},
+                )
+                yield CommandReturn(
+                    text=json.dumps(export_data, ensure_ascii=False, indent=2)
+                )
+                return
+
+            if context.crt_params:
+                yield CommandReturn(text="Usage: !memory export [l2]")
+                return
 
             profiles = await store.export_profiles_by_scope(ctx.session_key)
 
@@ -847,6 +986,111 @@ class Memory(Command):
             yield CommandReturn(
                 text=json.dumps(export_data, ensure_ascii=False, indent=2)
             )
+
+        @self.subcommand(
+            name="import",
+            help="Import L2 episodic memories into the current scope",
+            usage="!memory import l2 <json>",
+            aliases=[],
+        )
+        async def import_cmd(
+            self: Memory,
+            context: ExecuteContext,
+        ) -> AsyncGenerator[CommandReturn, None]:
+            store = self.plugin.memory_store
+            ctx = await self._build_runtime_context(self.plugin, context)
+
+            if len(context.crt_params) < 2 or context.crt_params[0] != "l2":
+                yield CommandReturn(text="Usage: !memory import l2 <json>")
+                return
+            if not ctx.kb_id or not await self._is_memory_kb_active(store, ctx.api, ctx.kb_id):
+                yield CommandReturn(
+                    text="[Memory] Memory knowledge base is not configured for the current pipeline."
+                )
+                return
+            embedding_model_uuid = str(ctx.config.get("embedding_model_uuid", "") or "")
+            if not embedding_model_uuid:
+                yield CommandReturn(text="[Memory] No embedding model configured.")
+                return
+
+            try:
+                raw_episodes = self._extract_l2_import_payload(context.crt_params[1:])
+                imported = await store.import_episodes_for_user(
+                    collection_id=ctx.kb_id,
+                    embedding_model_uuid=embedding_model_uuid,
+                    user_key=ctx.user_key,
+                    episodes=raw_episodes,
+                    bot_uuid=ctx.bot_uuid,
+                )
+            except ValueError as exc:
+                yield CommandReturn(text=str(exc))
+                return
+
+            await store.append_audit_entry(
+                scope_key=ctx.session_key,
+                user_key=ctx.user_key,
+                operation="import_l2",
+                target_type="episode",
+                target_id=ctx.session_key,
+                summary=f"Imported {len(imported)} L2 episodes",
+                sender_id=str(ctx.query_vars.get("sender_id", "") or ""),
+                sender_name=str(ctx.query_vars.get("sender_name", "") or ""),
+                query_id=context.query_id,
+                metadata={"kb_id": ctx.kb_id, "count": len(imported)},
+            )
+            yield CommandReturn(text=f"[Memory] Imported {len(imported)} L2 episode(s).")
+
+        @self.subcommand(
+            name="delete",
+            help="Bulk delete scoped L2 episodic memories by filter",
+            usage="!memory delete --speaker <sender_id> | --tag <tag> | --before <timestamp> | --status <status>",
+            aliases=[],
+        )
+        async def delete_cmd(
+            self: Memory,
+            context: ExecuteContext,
+        ) -> AsyncGenerator[CommandReturn, None]:
+            store = self.plugin.memory_store
+            ctx = await self._build_runtime_context(self.plugin, context)
+
+            if not ctx.kb_id or not await self._is_memory_kb_active(store, ctx.api, ctx.kb_id):
+                yield CommandReturn(
+                    text="[Memory] Memory knowledge base is not configured for the current pipeline."
+                )
+                return
+
+            try:
+                options = self._parse_l2_delete_options(store, context.crt_params)
+                deleted, episode_ids = await store.delete_episodes_by_filters(
+                    collection_id=ctx.kb_id,
+                    user_key=ctx.user_key,
+                    sender_id=options["sender_id"],
+                    tag=options["tag"],
+                    before=options["before"],
+                    include_statuses=options["include_statuses"],
+                )
+            except ValueError as exc:
+                yield CommandReturn(text=str(exc))
+                return
+
+            await store.append_audit_entry(
+                scope_key=ctx.session_key,
+                user_key=ctx.user_key,
+                operation="delete_l2_bulk",
+                target_type="episode",
+                target_id=ctx.session_key,
+                summary=f"Bulk deleted {deleted} L2 episodes",
+                sender_id=str(ctx.query_vars.get("sender_id", "") or ""),
+                sender_name=str(ctx.query_vars.get("sender_name", "") or ""),
+                query_id=context.query_id,
+                metadata={
+                    "kb_id": ctx.kb_id,
+                    "deleted": deleted,
+                    "episode_ids": episode_ids,
+                    "filters": options,
+                },
+            )
+            yield CommandReturn(text=f"[Memory] Deleted {deleted} L2 episode(s).")
 
     async def _list_by_status(
         self,

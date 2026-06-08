@@ -396,8 +396,10 @@ class PersonalityCustomizer(EventListener):
 ## Import / Export
 
 - **Export (L1 profiles):** Use `!memory export` to export the current scope's session and speaker profiles as JSON. It does not export data from other sessions or scopes.
-- **Import (L2 episodic memory):** Upload a JSON file through the LangBot knowledge base UI to bulk-import episodic memories.
-- **L2 episodic memory can be browsed** via `!memory list [page]` and individual episodes deleted via `!memory forget <id>`. Full bulk export is not yet implemented.
+- **Export (L2 episodic memory):** Use `!memory export l2` to export all L2 episodes for the current `user_key` scope. Add `--status <active|superseded|archived|deleted>` or `--include-archived` / `--include-superseded` to narrow the exported lifecycle states.
+- **Import (L2 episodic memory):** Use `!memory import l2 <json>` with either a JSON list of episodes or an object containing an `episodes` list. Imported records are always written into the current scope's `user_key`; any `user_key` in the JSON is ignored and original episode IDs are preserved only as import metadata so another scope cannot be overwritten.
+- **Bulk delete (L2 episodic memory):** Use `!memory delete --speaker <sender_id>`, `!memory delete --tag <tag>`, `!memory delete --before <timestamp>`, or `!memory delete --status <status>`. Bulk deletion first enumerates the current `user_key` scope, deletes only matching scoped records, reports the affected count, and writes audit entries.
+- **L2 episodic memory can also be browsed** via `!memory list [page]`; individual episodes can be deleted via `!memory forget <id>`.
 
 ## Key Technical Q&A
 
@@ -470,11 +472,9 @@ That can lead to duplicate memory recall:
 
 So this is not a full failure, but it can waste context and make the prompt noisier.
 
-### Q8. Why is L2 export not supported yet?
+### Q8. How are L2 exports and imports scoped?
 
-The SDK now provides a `vector_list` API for paginated enumeration of vector store content. L2 episodic memories can be browsed via `!memory list [page]` and deleted individually via `!memory forget <episode_id>` or the `forget` tool.
-
-Full bulk export is not yet implemented, but the building blocks are in place.
+`!memory export l2` exports only the current `user_key` scope. `!memory import l2 <json>` also writes only into the current `user_key` scope, regardless of any `user_key` fields included in the JSON. Imported records receive new episode IDs; the original IDs are kept as import metadata for traceability.
 
 ### Q9. Will LongTermMemory and AgenticRAG duplicate recall when both are enabled?
 

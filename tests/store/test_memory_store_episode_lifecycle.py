@@ -11,6 +11,7 @@ class FakeVectorPlugin:
         self.upserts: list[tuple[str, dict]] = []
         self.fail_hybrid = fail_hybrid
         self.search_calls: list[dict] = []
+        self.delete_calls: list[dict] = []
 
     async def invoke_embedding(self, _embedding_model_uuid: str, texts: list[str]) -> list[list[float]]:
         return [[float(index + 1)] for index, _ in enumerate(texts)]
@@ -36,6 +37,25 @@ class FakeVectorPlugin:
     async def vector_list(self, collection_id, filters=None, limit=20, offset=0):
         items = self._filtered(filters)
         return {"items": items[offset: offset + limit], "total": len(items)}
+
+    async def vector_delete(self, collection_id, file_ids=None, filters=None):
+        self.delete_calls.append({
+            "collection_id": collection_id,
+            "file_ids": file_ids,
+            "filters": filters,
+        })
+        deleted = 0
+        ids = set(file_ids or [])
+        for item_id in list(self.records):
+            if ids and item_id not in ids:
+                continue
+            if filters:
+                scoped = self._filtered(filters)
+                if item_id not in {item["id"] for item in scoped}:
+                    continue
+            self.records.pop(item_id, None)
+            deleted += 1
+        return deleted
 
     def _filtered(self, filters=None):
         items = list(self.records.values())
@@ -250,3 +270,84 @@ async def test_search_episodes_exact_episode_id_does_not_depend_on_vector_simila
     )
 
     assert [item["id"] for item in results] == ["episode-special"]
+
+
+@pytest.mark.asyncio
+async def test_export_episodes_by_user_includes_only_current_scope_and_statuses():
+    plugin = FakeVectorPlugin()
+    plugin.records = {
+        "active-1": _record("active-1", user_key="user-1", status="active"),
+        "archived-1": _record("archived-1", user_key="user-1", status="archived"),
+        "other": _record("other", user_key="user-2", status="active"),
+    }
+    store = MemoryStore(plugin)
+
+    exported = await store.export_episodes_by_user(
+        collection_id="kb-1",
+        user_key="user-1",
+        include_statuses=["active", "archived"],
+    )
+
+    assert {item["id"] for item in exported} == {"active-1", "archived-1"}
+    assert all(item["status"] in {"active", "archived"} for item in exported)
+
+
+@pytest.mark.asyncio
+async def test_import_episodes_for_user_forces_current_scope_and_new_ids():
+    plugin = FakeVectorPlugin()
+    plugin.records = {
+        "external-id": _record("external-id", user_key="other-scope", status="active"),
+    }
+    store = MemoryStore(plugin)
+
+    imported = await store.import_episodes_for_user(
+        collection_id="kb-1",
+        embedding_model_uuid="emb-1",
+        user_key="current-scope",
+        episodes=[
+            {
+                "id": "external-id",
+                "content": "Imported memory",
+                "tags": ["migration"],
+                "importance": 4,
+                "timestamp": "2026-01-03T00:00:00Z",
+                "user_key": "other-scope",
+                "sender_id": "u-1",
+                "sender_name": "Alice",
+                "source": "backup",
+                "status": "archived",
+            }
+        ],
+        bot_uuid="bot-1",
+    )
+
+    imported_id = imported[0]["id"]
+    assert imported_id != "external-id"
+    assert imported[0]["imported_episode_id"] == "external-id"
+    assert plugin.records["external-id"]["metadata"]["user_key"] == "other-scope"
+    assert plugin.records[imported_id]["metadata"]["user_key"] == "current-scope"
+    assert plugin.records[imported_id]["metadata"]["imported_episode_id"] == "external-id"
+    assert plugin.records[imported_id]["metadata"]["status"] == "archived"
+
+
+@pytest.mark.asyncio
+async def test_delete_episodes_by_filters_is_scope_safe():
+    plugin = FakeVectorPlugin()
+    plugin.records = {
+        "scoped-old": _record("scoped-old", user_key="user-1", status="archived"),
+        "scoped-active": _record("scoped-active", user_key="user-1", status="active"),
+        "other-old": _record("other-old", user_key="user-2", status="archived"),
+    }
+    store = MemoryStore(plugin)
+
+    deleted, episode_ids = await store.delete_episodes_by_filters(
+        collection_id="kb-1",
+        user_key="user-1",
+        include_statuses=["archived"],
+    )
+
+    assert deleted == 1
+    assert episode_ids == ["scoped-old"]
+    assert "scoped-old" not in plugin.records
+    assert "scoped-active" in plugin.records
+    assert "other-old" in plugin.records
