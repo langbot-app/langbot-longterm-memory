@@ -43,6 +43,22 @@ class Memory(Command):
         return f"- {status}: {detail}"
 
     @staticmethod
+    def _format_episode_detail(store, episode: dict) -> str:
+        tags = ", ".join(episode.get("tags", [])) or "-"
+        content = episode.get("content", "") or "-"
+        lines = ["[Memory Episode]"]
+        lines.append(f"ID: {episode.get('id', '-')}")
+        lines.append(f"Status: {episode.get('status', 'active')}")
+        lines.append(f"Timestamp: {episode.get('timestamp') or '-'}")
+        lines.append(f"Importance: {episode.get('importance', 2)}")
+        lines.append(f"Tags: {tags}")
+        lines.append(f"Sender: {episode.get('sender_name') or '-'} ({episode.get('sender_id') or '-'})")
+        lines.append(f"Source: {episode.get('source') or '-'}")
+        lines.append(f"Superseded by: {episode.get('superseded_by') or '-'}")
+        lines.append(f"Content: {store._preview_text(content, 500)}")
+        return "\n".join(lines)
+
+    @staticmethod
     def _parse_status_options(
         store,
         params: list[str],
@@ -621,6 +637,104 @@ class Memory(Command):
             yield CommandReturn(text=f"[Memory] Episode {episode_id} deleted.")
 
         @self.subcommand(
+            name="show",
+            help="Show an episodic memory by ID",
+            usage="!memory show <episode_id>",
+            aliases=[],
+        )
+        async def show_cmd(
+            self: Memory,
+            context: ExecuteContext,
+        ) -> AsyncGenerator[CommandReturn, None]:
+            store = self.plugin.memory_store
+            ctx = await self._build_runtime_context(self.plugin, context)
+
+            if not ctx.kb_id or not await self._is_memory_kb_active(store, ctx.api, ctx.kb_id):
+                yield CommandReturn(
+                    text="[Memory] Memory knowledge base is not configured for the current pipeline."
+                )
+                return
+
+            if not context.crt_params:
+                yield CommandReturn(text="Usage: !memory show <episode_id>")
+                return
+
+            episode_id = context.crt_params[0].strip()
+            episode = await store.get_episode_by_id(
+                collection_id=ctx.kb_id,
+                episode_id=episode_id,
+                user_key=ctx.user_key,
+            )
+            if not episode:
+                yield CommandReturn(text=f"[Memory] Episode {episode_id} not found.")
+                return
+            yield CommandReturn(text=self._format_episode_detail(store, episode))
+
+        @self.subcommand(
+            name="superseded",
+            help="List superseded episodic memories",
+            usage="!memory superseded [page]",
+            aliases=[],
+        )
+        async def superseded_cmd(
+            self: Memory,
+            context: ExecuteContext,
+        ) -> AsyncGenerator[CommandReturn, None]:
+            async for item in self._list_by_status(
+                context,
+                self.plugin.memory_store.EPISODE_STATUS_SUPERSEDED,
+            ):
+                yield item
+
+        @self.subcommand(
+            name="archived",
+            help="List archived episodic memories",
+            usage="!memory archived [page]",
+            aliases=[],
+        )
+        async def archived_cmd(
+            self: Memory,
+            context: ExecuteContext,
+        ) -> AsyncGenerator[CommandReturn, None]:
+            async for item in self._list_by_status(
+                context,
+                self.plugin.memory_store.EPISODE_STATUS_ARCHIVED,
+            ):
+                yield item
+
+        @self.subcommand(
+            name="archive",
+            help="Archive an episodic memory by ID",
+            usage="!memory archive <episode_id>",
+            aliases=[],
+        )
+        async def archive_cmd(
+            self: Memory,
+            context: ExecuteContext,
+        ) -> AsyncGenerator[CommandReturn, None]:
+            async for item in self._set_episode_status(
+                context,
+                self.plugin.memory_store.EPISODE_STATUS_ARCHIVED,
+            ):
+                yield item
+
+        @self.subcommand(
+            name="restore",
+            help="Restore an episodic memory to active status",
+            usage="!memory restore <episode_id>",
+            aliases=[],
+        )
+        async def restore_cmd(
+            self: Memory,
+            context: ExecuteContext,
+        ) -> AsyncGenerator[CommandReturn, None]:
+            async for item in self._set_episode_status(
+                context,
+                self.plugin.memory_store.EPISODE_STATUS_ACTIVE,
+            ):
+                yield item
+
+        @self.subcommand(
             name="audit",
             help="List or export scoped memory audit entries",
             usage="!memory audit [page|export]",
@@ -730,3 +844,99 @@ class Memory(Command):
             yield CommandReturn(
                 text=json.dumps(export_data, ensure_ascii=False, indent=2)
             )
+
+    async def _list_by_status(
+        self,
+        context: ExecuteContext,
+        status: str,
+    ) -> AsyncGenerator[CommandReturn, None]:
+        store = self.plugin.memory_store
+        ctx = await self._build_runtime_context(self.plugin, context)
+
+        if not ctx.kb_id or not await self._is_memory_kb_active(store, ctx.api, ctx.kb_id):
+            yield CommandReturn(
+                text="[Memory] Memory knowledge base is not configured for the current pipeline."
+            )
+            return
+
+        page = 1
+        if context.crt_params:
+            try:
+                page = max(1, int(context.crt_params[0]))
+            except ValueError:
+                yield CommandReturn(text=f"Usage: !memory {status} [page]")
+                return
+
+        page_size = 10
+        offset = (page - 1) * page_size
+        episodes, total = await store.list_episodes(
+            collection_id=ctx.kb_id,
+            user_key=ctx.user_key,
+            limit=page_size,
+            offset=offset,
+            include_statuses=[status],
+        )
+        if not episodes:
+            yield CommandReturn(text=f"[Memory] No {status} episodes found.")
+            return
+
+        total_str = str(total) if total >= 0 else "?"
+        lines = [f"[Memory] {status.capitalize()} episodes (page {page}, {total_str} total):"]
+        for ep in episodes:
+            ts = ep["timestamp"][:10] if ep.get("timestamp") else "?"
+            tags = ", ".join(ep.get("tags", []))
+            tag_str = f" [{tags}]" if tags else ""
+            eid = ep.get("id", "?")
+            content_preview = store._preview_text(ep.get("content", ""), 80)
+            lines.append(f"  [{eid}] {ts}{tag_str} {content_preview}")
+        yield CommandReturn(text="\n".join(lines))
+
+    async def _set_episode_status(
+        self,
+        context: ExecuteContext,
+        status: str,
+    ) -> AsyncGenerator[CommandReturn, None]:
+        store = self.plugin.memory_store
+        ctx = await self._build_runtime_context(self.plugin, context)
+
+        if not ctx.kb_id or not await self._is_memory_kb_active(store, ctx.api, ctx.kb_id):
+            yield CommandReturn(
+                text="[Memory] Memory knowledge base is not configured for the current pipeline."
+            )
+            return
+
+        embedding_model_uuid = str(ctx.config.get("embedding_model_uuid", "") or "")
+        if not embedding_model_uuid:
+            yield CommandReturn(text="[Memory] No embedding model configured.")
+            return
+
+        if not context.crt_params:
+            yield CommandReturn(text=f"Usage: !memory {status} <episode_id>")
+            return
+
+        episode_id = context.crt_params[0].strip()
+        episode = await store.update_episode_status(
+            collection_id=ctx.kb_id,
+            embedding_model_uuid=embedding_model_uuid,
+            episode_id=episode_id,
+            user_key=ctx.user_key,
+            status=status,
+        )
+        if not episode:
+            yield CommandReturn(text=f"[Memory] Episode {episode_id} not found.")
+            return
+
+        operation = "restore" if status == store.EPISODE_STATUS_ACTIVE else status
+        await store.append_audit_entry(
+            scope_key=ctx.session_key,
+            user_key=ctx.user_key,
+            operation=operation,
+            target_type="episode",
+            target_id=episode_id,
+            summary=f"Set episode {episode_id} status to {status}",
+            sender_id=str(ctx.query_vars.get("sender_id", "") or ""),
+            sender_name=str(ctx.query_vars.get("sender_name", "") or ""),
+            query_id=context.query_id,
+            metadata={"kb_id": ctx.kb_id, "status": status},
+        )
+        yield CommandReturn(text=f"[Memory] Episode {episode_id} status set to {status}.")
