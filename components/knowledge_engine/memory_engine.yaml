@@ -109,6 +109,50 @@ spec:
       required: false
       default: true
 
+    - name: consolidation_enabled
+      label:
+        en_US: Enable Consolidation Run
+        zh_Hans: 启用记忆整理执行
+      description:
+        en_US: Allows !memory consolidate run to archive scoped candidates and write a summary. Preview is always available.
+        zh_Hans: 允许 !memory consolidate run 归档当前范围候选并写入摘要。预览始终可用。
+      type: boolean
+      required: false
+      default: false
+
+    - name: consolidation_min_age_days
+      label:
+        en_US: Consolidation Min Age Days
+        zh_Hans: 记忆整理最小天数
+      description:
+        en_US: Active low-importance memories must be at least this old before consolidation can propose archiving them.
+        zh_Hans: 低重要度活跃记忆至少达到该天数后，整理流程才会建议归档。
+      type: integer
+      required: false
+      default: 7
+
+    - name: consolidation_max_candidates
+      label:
+        en_US: Consolidation Max Candidates
+        zh_Hans: 记忆整理候选上限
+      description:
+        en_US: Maximum number of scoped episodes considered in one consolidation preview or run.
+        zh_Hans: 单次整理预览或执行最多处理的当前范围情景记忆数量。
+      type: integer
+      required: false
+      default: 20
+
+    - name: consolidation_apply_profile_updates
+      label:
+        en_US: Apply Profile Updates During Consolidation
+        zh_Hans: 整理时更新画像
+      description:
+        en_US: Reserved for future profile-update proposals. Keep disabled unless explicitly supported.
+        zh_Hans: 预留给未来画像更新建议。除非明确支持，否则保持关闭。
+      type: boolean
+      required: false
+      default: false
+
   retrieval_schema:
     - name: top_k
       label:

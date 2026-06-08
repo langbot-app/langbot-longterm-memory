@@ -185,6 +185,42 @@ class Memory(Command):
         return episodes
 
     @staticmethod
+    def _consolidation_config(config: dict) -> dict:
+        def as_int(key: str, default: int) -> int:
+            try:
+                return int(config.get(key, default))
+            except (TypeError, ValueError):
+                return default
+
+        return {
+            "enabled": bool(config.get("consolidation_enabled", False)),
+            "min_age_days": max(0, as_int("consolidation_min_age_days", 7)),
+            "max_candidates": max(1, min(100, as_int("consolidation_max_candidates", 20))),
+            "apply_profile_updates": bool(
+                config.get("consolidation_apply_profile_updates", False)
+            ),
+        }
+
+    @staticmethod
+    def _format_consolidation_preview(preview: dict) -> str:
+        lines = ["[Memory Consolidation Preview]"]
+        candidate_ids = preview.get("candidate_episode_ids", [])
+        archive_ids = preview.get("episodes_to_archive", [])
+        lines.append(f"Candidates: {len(candidate_ids)}")
+        lines.append(f"Will archive: {len(archive_ids)}")
+        if candidate_ids:
+            lines.append("Candidate IDs: " + ", ".join(candidate_ids))
+        if preview.get("summary_episode"):
+            lines.append(f"Summary episode: {preview['summary_episode']}")
+        else:
+            lines.append("Summary episode: (none)")
+        profile_updates = preview.get("profile_updates", [])
+        lines.append(f"Profile updates: {len(profile_updates)}")
+        for note in preview.get("risk_notes", []):
+            lines.append(f"Risk: {note}")
+        return "\n".join(lines)
+
+    @staticmethod
     async def _build_runtime_context(
         plugin,
         context: ExecuteContext,
@@ -1091,6 +1127,118 @@ class Memory(Command):
                 },
             )
             yield CommandReturn(text=f"[Memory] Deleted {deleted} L2 episode(s).")
+
+        @self.subcommand(
+            name="consolidate",
+            help="Preview or run scoped memory consolidation",
+            usage="!memory consolidate preview|run",
+            aliases=[],
+        )
+        async def consolidate_cmd(
+            self: Memory,
+            context: ExecuteContext,
+        ) -> AsyncGenerator[CommandReturn, None]:
+            store = self.plugin.memory_store
+            ctx = await self._build_runtime_context(self.plugin, context)
+
+            if not context.crt_params or context.crt_params[0] not in {"preview", "run"}:
+                yield CommandReturn(text="Usage: !memory consolidate preview|run")
+                return
+            if len(context.crt_params) > 1:
+                yield CommandReturn(text="Usage: !memory consolidate preview|run")
+                return
+            if not ctx.kb_id or not await self._is_memory_kb_active(store, ctx.api, ctx.kb_id):
+                yield CommandReturn(
+                    text="[Memory] Memory knowledge base is not configured for the current pipeline."
+                )
+                return
+
+            cfg = self._consolidation_config(ctx.config)
+            mode = context.crt_params[0]
+
+            if mode == "preview":
+                preview = await store.preview_consolidation(
+                    collection_id=ctx.kb_id,
+                    user_key=ctx.user_key,
+                    min_age_days=cfg["min_age_days"],
+                    max_candidates=cfg["max_candidates"],
+                    apply_profile_updates=cfg["apply_profile_updates"],
+                )
+                yield CommandReturn(text=self._format_consolidation_preview(preview))
+                return
+
+            if not cfg["enabled"]:
+                yield CommandReturn(
+                    text="[Memory] Consolidation run is disabled. Set consolidation_enabled=true on the memory KB and run preview first."
+                )
+                return
+
+            embedding_model_uuid = str(ctx.config.get("embedding_model_uuid", "") or "")
+            if not embedding_model_uuid:
+                yield CommandReturn(text="[Memory] No embedding model configured.")
+                return
+
+            result = await store.apply_consolidation(
+                collection_id=ctx.kb_id,
+                embedding_model_uuid=embedding_model_uuid,
+                user_key=ctx.user_key,
+                min_age_days=cfg["min_age_days"],
+                max_candidates=cfg["max_candidates"],
+                apply_profile_updates=cfg["apply_profile_updates"],
+            )
+            archived_ids = result.get("archived_episode_ids", [])
+            summary = result.get("summary_episode")
+            for episode_id in archived_ids:
+                await store.append_audit_entry(
+                    scope_key=ctx.session_key,
+                    user_key=ctx.user_key,
+                    operation="consolidate_archive",
+                    target_type="episode",
+                    target_id=episode_id,
+                    summary=f"Archived episode {episode_id} during consolidation",
+                    sender_id=str(ctx.query_vars.get("sender_id", "") or ""),
+                    sender_name=str(ctx.query_vars.get("sender_name", "") or ""),
+                    query_id=context.query_id,
+                    metadata={"kb_id": ctx.kb_id},
+                )
+            if summary:
+                await store.append_audit_entry(
+                    scope_key=ctx.session_key,
+                    user_key=ctx.user_key,
+                    operation="consolidate_summary",
+                    target_type="episode",
+                    target_id=summary.get("id", ""),
+                    summary="Created consolidation summary episode",
+                    sender_id=str(ctx.query_vars.get("sender_id", "") or ""),
+                    sender_name=str(ctx.query_vars.get("sender_name", "") or ""),
+                    query_id=context.query_id,
+                    metadata={"kb_id": ctx.kb_id, "episode": summary},
+                )
+            await store.append_audit_entry(
+                scope_key=ctx.session_key,
+                user_key=ctx.user_key,
+                operation="consolidate_run",
+                target_type="episode",
+                target_id=ctx.session_key,
+                summary=(
+                    f"Consolidation archived {len(archived_ids)} episodes"
+                    + (" and wrote a summary" if summary else "")
+                ),
+                sender_id=str(ctx.query_vars.get("sender_id", "") or ""),
+                sender_name=str(ctx.query_vars.get("sender_name", "") or ""),
+                query_id=context.query_id,
+                metadata={
+                    "kb_id": ctx.kb_id,
+                    "archived_episode_ids": archived_ids,
+                    "summary_episode_id": summary.get("id", "") if summary else "",
+                },
+            )
+            yield CommandReturn(
+                text=(
+                    f"[Memory] Consolidation archived {len(archived_ids)} episode(s)"
+                    + (f" and wrote summary {summary.get('id')}." if summary else ".")
+                )
+            )
 
     async def _list_by_status(
         self,

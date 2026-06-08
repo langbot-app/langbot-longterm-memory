@@ -351,3 +351,71 @@ async def test_delete_episodes_by_filters_is_scope_safe():
     assert "scoped-old" not in plugin.records
     assert "scoped-active" in plugin.records
     assert "other-old" in plugin.records
+
+
+@pytest.mark.asyncio
+async def test_consolidation_preview_does_not_modify_records():
+    plugin = FakeVectorPlugin()
+    plugin.records = {
+        "old-low": _record(
+            "old-low",
+            user_key="user-1",
+            status="active",
+            content="Older low importance memory",
+        ),
+        "hidden": _record("hidden", user_key="user-1", status="superseded"),
+        "other": _record("other", user_key="user-2", status="superseded"),
+    }
+    plugin.records["old-low"]["metadata"]["importance"] = "1"
+    plugin.records["old-low"]["metadata"]["timestamp"] = "2020-01-01T00:00:00Z"
+    store = MemoryStore(plugin)
+
+    preview = await store.preview_consolidation(
+        collection_id="kb-1",
+        user_key="user-1",
+        min_age_days=7,
+        max_candidates=20,
+    )
+
+    assert set(preview["candidate_episode_ids"]) == {"old-low", "hidden"}
+    assert set(preview["episodes_to_archive"]) == {"old-low", "hidden"}
+    assert preview["summary_episode"]
+    assert plugin.records["old-low"]["metadata"]["status"] == "active"
+    assert plugin.records["hidden"]["metadata"]["status"] == "superseded"
+    assert "other" in plugin.records
+    assert plugin.upserts == []
+
+
+@pytest.mark.asyncio
+async def test_apply_consolidation_archives_scoped_candidates_and_writes_summary():
+    plugin = FakeVectorPlugin()
+    plugin.records = {
+        "old-low": _record(
+            "old-low",
+            user_key="user-1",
+            status="active",
+            content="Older low importance memory",
+        ),
+        "hidden": _record("hidden", user_key="user-1", status="superseded"),
+        "other": _record("other", user_key="user-2", status="superseded"),
+    }
+    plugin.records["old-low"]["metadata"]["importance"] = "1"
+    plugin.records["old-low"]["metadata"]["timestamp"] = "2020-01-01T00:00:00Z"
+    store = MemoryStore(plugin)
+
+    result = await store.apply_consolidation(
+        collection_id="kb-1",
+        embedding_model_uuid="emb-1",
+        user_key="user-1",
+        min_age_days=7,
+        max_candidates=20,
+    )
+
+    assert set(result["archived_episode_ids"]) == {"old-low", "hidden"}
+    assert plugin.records["old-low"]["metadata"]["status"] == "archived"
+    assert plugin.records["hidden"]["metadata"]["status"] == "archived"
+    assert plugin.records["other"]["metadata"]["status"] == "superseded"
+    summary = result["summary_episode"]
+    assert summary is not None
+    assert summary["source"] == "consolidation"
+    assert {"consolidation", "summary"} == set(summary["tags"])
