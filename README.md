@@ -17,6 +17,7 @@ Long-term memory plugin for LangBot with a dual-layer design:
 - Provides `!memory list [page]` to browse episodic memories with pagination
 - Provides `!memory forget <episode_id>` to delete a specific episode
 - Provides `!memory search <query>` to search episodes (results include episode IDs)
+- Provides `!memory health` to verify KB configuration and metadata-filter isolation
 - Provides a `!memory export` command to export L1 profiles for the current session as JSON
 - Automatically supersedes related older episodes when a correction/fact-update/clarification is stored
 
@@ -132,6 +133,8 @@ L2 episodic memory relies on arbitrary metadata fields (`user_key`, `episode_id`
 Milvus and pgvector use a fixed column schema and silently drop metadata fields they do not recognize. This means metadata-based isolation (`user_key` filtering) and episodic memory commands (`!memory list`, `!memory forget`, `!memory search`) will not work correctly on these backends — filters will be ignored and queries may return unscoped results.
 
 If you need to use LongTermMemory, use Chroma, Qdrant, or SeekDB as your vector database backend.
+
+After configuring the memory knowledge base, run `!memory health` in a pipeline that uses that knowledge base. The health check verifies that the KB is present, active in the current pipeline, has an embedding model, and can use metadata filters to keep two temporary `user_key` probe records isolated. If this command reports metadata-filter leakage, the backend is not safe for scoped LongTermMemory recall.
 
 ## How It Works
 
@@ -260,7 +263,8 @@ That is intentional:
    - `recall_memory` for active memory lookup when automatic recall is insufficient
    - `update_profile` for stable preferences and profile data
    - `forget` to delete a specific episodic memory by ID
-5. Use `!memory`, `!memory profile`, `!memory search <query>`, `!memory list [page]`, `!memory forget <id>`, and `!memory export` to inspect behavior.
+5. Run `!memory health` in a pipeline that includes the memory KB. Treat `ERROR` as a setup problem before relying on scoped recall.
+6. Use `!memory`, `!memory profile`, `!memory search <query>`, `!memory list [page]`, `!memory forget <id>`, and `!memory export` to inspect behavior.
 
 ## Context Sharing for Other Plugins
 
