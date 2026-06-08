@@ -1277,6 +1277,88 @@ class MemoryStore:
             filters=filters,
         )
 
+    def _episode_from_vector_item(self, item: dict[str, Any]) -> dict[str, Any]:
+        meta = item.get("metadata", {})
+        return {
+            "id": item.get("id", ""),
+            "content": meta.get("content", "") or item.get("document", ""),
+            "tags": meta.get("tags", "").split(",") if meta.get("tags") else [],
+            "importance": int(meta.get("importance", "2")),
+            "timestamp": meta.get("timestamp", ""),
+            "sender_id": meta.get("sender_id", ""),
+            "sender_name": meta.get("sender_name", ""),
+            "source": meta.get("source", ""),
+            "status": self.episode_status_from_metadata(meta),
+            "superseded_by": meta.get("superseded_by", ""),
+            "metadata": meta,
+        }
+
+    async def get_episode_by_id(
+        self,
+        collection_id: str,
+        episode_id: str,
+        user_key: str,
+    ) -> dict[str, Any] | None:
+        """Find a single episode by ID within the current user_key scope."""
+        offset = 0
+        batch_size = 100
+        while True:
+            result = await self.plugin.vector_list(
+                collection_id=collection_id,
+                filters={"user_key": user_key},
+                limit=batch_size,
+                offset=offset,
+            )
+            items = result.get("items", [])
+            for item in items:
+                if item.get("id") == episode_id:
+                    return self._episode_from_vector_item(item)
+            if not items or len(items) < batch_size:
+                return None
+            total = result.get("total", -1)
+            offset += len(items)
+            if total >= 0 and offset >= total:
+                return None
+
+    async def update_episode_status(
+        self,
+        collection_id: str,
+        embedding_model_uuid: str,
+        episode_id: str,
+        user_key: str,
+        status: str,
+    ) -> dict[str, Any] | None:
+        """Update an episode lifecycle status while preserving metadata."""
+        normalized_status = self.normalize_episode_status_value(status)
+        episode = await self.get_episode_by_id(
+            collection_id=collection_id,
+            episode_id=episode_id,
+            user_key=user_key,
+        )
+        if not episode:
+            return None
+
+        meta = dict(episode.get("metadata", {}))
+        content = episode.get("content", "")
+        meta["content"] = content
+        meta["status"] = normalized_status
+        if normalized_status == self.EPISODE_STATUS_ACTIVE:
+            meta.pop("superseded_by", None)
+
+        vectors = await self.plugin.invoke_embedding(embedding_model_uuid, [content])
+        await self.plugin.vector_upsert(
+            collection_id=collection_id,
+            vectors=vectors,
+            ids=[episode_id],
+            metadata=[meta],
+            documents=[content],
+        )
+        updated = dict(episode)
+        updated["status"] = normalized_status
+        updated["metadata"] = meta
+        updated["superseded_by"] = meta.get("superseded_by", "")
+        return updated
+
     # ======================== formatting ========================
 
     @staticmethod

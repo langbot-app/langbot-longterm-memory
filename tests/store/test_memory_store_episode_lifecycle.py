@@ -166,3 +166,35 @@ async def test_auto_supersede_marks_old_episode_status():
 
     assert plugin.records["old-1"]["metadata"]["status"] == "superseded"
     assert plugin.records["old-1"]["metadata"]["superseded_by"]
+
+
+@pytest.mark.asyncio
+async def test_update_episode_status_preserves_scope_and_metadata():
+    plugin = FakeVectorPlugin()
+    plugin.records = {
+        "ep-1": _record("ep-1", status="active", content="Scoped memory"),
+        "other": _record("other", user_key="user-2", status="active"),
+    }
+    store = MemoryStore(plugin)
+
+    updated = await store.update_episode_status(
+        collection_id="kb-1",
+        embedding_model_uuid="emb-1",
+        episode_id="ep-1",
+        user_key="user-1",
+        status="archived",
+    )
+    missing = await store.update_episode_status(
+        collection_id="kb-1",
+        embedding_model_uuid="emb-1",
+        episode_id="other",
+        user_key="user-1",
+        status="archived",
+    )
+
+    assert updated is not None
+    assert updated["status"] == "archived"
+    assert plugin.records["ep-1"]["metadata"]["status"] == "archived"
+    assert plugin.records["ep-1"]["metadata"]["content"] == "Scoped memory"
+    assert plugin.records["other"]["metadata"]["status"] == "active"
+    assert missing is None

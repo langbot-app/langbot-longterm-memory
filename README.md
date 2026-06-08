@@ -284,6 +284,10 @@ Memory-changing operations write scoped audit entries to plugin storage, not to 
 
 Use `!memory audit [page]` to inspect recent entries for the current scope, or `!memory audit export` to export only the current scope's audit log as JSON.
 
+## Managing Hidden Episodes
+
+Use `!memory show <episode_id>` to inspect one episode, including status, sender, source, tags, importance, and supersede metadata. Use `!memory superseded [page]` and `!memory archived [page]` to inspect records hidden from normal recall. Use `!memory archive <episode_id>` to hide an active episode without deleting it, and `!memory restore <episode_id>` to make an archived or superseded episode active again. Archive and restore operations write audit entries.
+
 ## Context Sharing for Other Plugins
 
 LongTermMemory writes a structured context summary to the query variable `_ltm_context` during every `PromptPreProcessing` event. Other plugins can read this variable to make programmatic decisions based on user memory, without importing or referencing LongTermMemory in any way.
