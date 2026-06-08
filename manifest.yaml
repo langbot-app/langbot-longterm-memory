@@ -58,6 +58,10 @@ spec:
     Command:
       fromDirs:
       - path: components/commands/
+    Page:
+      fromDirs:
+      - path: components/pages/
+        maxDepth: 2
 execution:
   python:
     path: main.py
