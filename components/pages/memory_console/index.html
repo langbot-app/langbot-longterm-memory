@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title data-i18n="title">Memory Console</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--langbot-bg, #ffffff);
+      color: var(--langbot-text, #0f172a);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+    }
+    button, input, select, textarea { font: inherit; }
+    button {
+      min-height: 34px;
+      border: 1px solid var(--langbot-border, #d8dee8);
+      border-radius: 6px;
+      background: var(--langbot-bg-card, #f8fafc);
+      color: var(--langbot-text, #0f172a);
+      padding: 0 12px;
+      cursor: pointer;
+    }
+    button.primary {
+      border-color: var(--langbot-accent, #2563eb);
+      background: var(--langbot-accent, #2563eb);
+      color: #fff;
+    }
+    button.danger { color: #b91c1c; border-color: #f1b5b5; }
+    button:disabled { cursor: not-allowed; opacity: .55; }
+    input, select, textarea {
+      width: 100%;
+      min-height: 36px;
+      border: 1px solid var(--langbot-border, #d8dee8);
+      border-radius: 6px;
+      background: var(--langbot-bg-card, #f8fafc);
+      color: var(--langbot-text, #0f172a);
+      padding: 7px 9px;
+      outline: none;
+    }
+    textarea { min-height: 78px; resize: vertical; }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--langbot-text-muted, #64748b);
+      font-size: 12px;
+    }
+    h1, h2, h3 { letter-spacing: 0; }
+    h1 { margin: 0; font-size: 25px; line-height: 1.15; }
+    h2 { margin: 0 0 12px; font-size: 16px; }
+    h3 { margin: 0 0 8px; font-size: 14px; }
+    pre {
+      margin: 0;
+      max-height: 360px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .shell {
+      width: min(1220px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 24px 0 36px;
+    }
+    .topbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .muted { color: var(--langbot-text-muted, #64748b); }
+    .panel {
+      border: 1px solid var(--langbot-border, #e2e8f0);
+      border-radius: 8px;
+      background: var(--langbot-bg-card, #f8fafc);
+      padding: 14px;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: 1.3fr repeat(3, minmax(0, .8fr));
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .status-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      border-radius: 999px;
+      padding: 2px 9px;
+      font-size: 12px;
+      border: 1px solid var(--langbot-border, #d8dee8);
+      color: var(--langbot-text-muted, #64748b);
+      background: var(--langbot-bg, #fff);
+    }
+    .pill.ok { color: #047857; border-color: #8fd9bd; background: rgba(16, 185, 129, .08); }
+    .pill.warn { color: #b45309; border-color: #f5c16c; background: rgba(245, 158, 11, .10); }
+    .metric-label { color: var(--langbot-text-muted, #64748b); }
+    .metric-value { margin-top: 7px; font-size: 24px; font-weight: 720; line-height: 1; }
+    .layout {
+      display: grid;
+      grid-template-columns: 330px minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+    }
+    .side-stack, .content-stack, .list { display: grid; gap: 12px; }
+    .field { margin-bottom: 10px; }
+    .row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .tabs {
+      display: flex;
+      gap: 6px;
+      border-bottom: 1px solid var(--langbot-border, #e2e8f0);
+      padding-bottom: 8px;
+      margin-bottom: 14px;
+    }
+    .tab.active {
+      color: #fff;
+      border-color: var(--langbot-accent, #2563eb);
+      background: var(--langbot-accent, #2563eb);
+    }
+    .empty, .notice {
+      border: 1px solid var(--langbot-border, #e2e8f0);
+      border-radius: 8px;
+      background: var(--langbot-bg, #fff);
+      padding: 12px;
+      color: var(--langbot-text-muted, #64748b);
+    }
+    .error {
+      color: #b91c1c;
+      border-color: #fecaca;
+      background: rgba(254, 226, 226, .35);
+    }
+    .item {
+      border: 1px solid var(--langbot-border, #e2e8f0);
+      border-radius: 8px;
+      background: var(--langbot-bg, #fff);
+      padding: 12px;
+    }
+    .item-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .item-title {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      font-weight: 650;
+    }
+    .tags {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 9px;
+    }
+    .debug {
+      display: none;
+      margin-top: 12px;
+    }
+    .debug.open { display: block; }
+    .scope-card {
+      display: grid;
+      gap: 8px;
+    }
+    .scope-current {
+      border-left: 3px solid var(--langbot-accent, #2563eb);
+      padding-left: 10px;
+      overflow-wrap: anywhere;
+    }
+    @media (max-width: 980px) {
+      .summary, .layout, .row { grid-template-columns: 1fr; }
+      .topbar { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div>
+        <h1 data-i18n="title">Memory Console</h1>
+        <div id="subtitle" class="muted"></div>
+      </div>
+      <div class="actions">
+        <button id="refreshBtn" class="primary" data-i18n="refresh">Refresh</button>
+      </div>
+    </header>
+
+    <section class="summary">
+      <div class="panel">
+        <div class="metric-label" data-i18n="systemStatus">System Status</div>
+        <div class="status-line">
+          <span id="kbStatus" class="pill warn">-</span>
+          <span id="scopeStatus" class="pill warn">-</span>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="metric-label" data-i18n="memoryKb">Memory KB</div>
+        <div id="kbCount" class="metric-value">-</div>
+      </div>
+      <div class="panel">
+        <div class="metric-label" data-i18n="profiles">Profiles</div>
+        <div id="profileCount" class="metric-value">-</div>
+      </div>
+      <div class="panel">
+        <div class="metric-label" data-i18n="speakers">Speakers</div>
+        <div id="speakerProfileCount" class="metric-value">-</div>
+      </div>
+    </section>
+
+    <section class="layout">
+      <aside class="side-stack">
+        <div class="panel scope-card">
+          <h2 data-i18n="currentScope">Current Scope</h2>
+          <div class="field">
+            <label for="scopeSelect" data-i18n="knownScope">Known scope</label>
+            <select id="scopeSelect"></select>
+          </div>
+          <div class="field">
+            <label for="speakerSelect" data-i18n="speaker">Speaker</label>
+            <select id="speakerSelect"></select>
+          </div>
+          <div class="scope-current">
+            <div class="muted">scope_key</div>
+            <div id="scopePreview">-</div>
+            <div class="muted" style="margin-top: 8px;">user_key</div>
+            <div id="userPreview">-</div>
+          </div>
+          <div class="actions">
+            <button id="loadProfileBtn" class="primary" data-i18n="loadProfiles">Load Profiles</button>
+            <button id="toggleDebugBtn" data-i18n="advanced">Advanced</button>
+          </div>
+          <div id="debugPanel" class="debug">
+            <div class="field">
+              <label for="botUuid">bot_uuid</label>
+              <input id="botUuid" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="sessionName">session_name</label>
+              <input id="sessionName" autocomplete="off" placeholder="group_123">
+            </div>
+            <div class="field">
+              <label for="isolation">isolation</label>
+              <select id="isolation">
+                <option value="session">session</option>
+                <option value="bot">bot</option>
+              </select>
+            </div>
+            <div class="actions">
+              <button id="deriveBtn" data-i18n="derive">Derive</button>
+            </div>
+            <div class="field" style="margin-top: 10px;">
+              <label for="scopeKey">scope_key</label>
+              <input id="scopeKey" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="userKey">user_key</label>
+              <input id="userKey" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="senderId">sender_id</label>
+              <input id="senderId" autocomplete="off">
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2 data-i18n="knowledgeBase">Knowledge Base</h2>
+          <div id="kbList" class="list"></div>
+          <div id="kbDebug" class="debug">
+            <div class="field">
+              <label for="collectionId">collection_id</label>
+              <input id="collectionId" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="embeddingModel">embedding_model_uuid</label>
+              <input id="embeddingModel" autocomplete="off">
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <main class="panel">
+        <div class="tabs">
+          <button class="tab active" data-tab="profiles" data-i18n="profiles">Profiles</button>
+          <button class="tab" data-tab="episodes" data-i18n="episodes">Episodes</button>
+          <button class="tab" data-tab="export" data-i18n="export">Export</button>
+          <button class="tab" data-tab="diagnostics" data-i18n="diagnostics">Diagnostics</button>
+        </div>
+
+        <section id="profilesTab" class="tab-panel">
+          <div id="profileOutput" class="content-stack"></div>
+        </section>
+
+        <section id="episodesTab" class="tab-panel" style="display:none;">
+          <div class="row">
+            <div class="field">
+              <label for="episodeQuery" data-i18n="query">Query</label>
+              <textarea id="episodeQuery"></textarea>
+            </div>
+            <div>
+              <div class="row">
+                <div class="field">
+                  <label for="topK">top_k</label>
+                  <input id="topK" type="number" min="1" max="50" value="10">
+                </div>
+                <div class="field">
+                  <label for="pageNo" data-i18n="page">Page</label>
+                  <input id="pageNo" type="number" min="1" value="1">
+                </div>
+              </div>
+              <div class="row">
+                <div class="field">
+                  <label for="source">source</label>
+                  <input id="source" autocomplete="off">
+                </div>
+                <div class="field">
+                  <label for="importanceMin">importance_min</label>
+                  <input id="importanceMin" type="number" min="1" max="5">
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="actions" style="margin-bottom: 12px;">
+            <button id="listEpisodesBtn" data-i18n="listEpisodes">List</button>
+            <button id="searchEpisodesBtn" class="primary" data-i18n="searchEpisodes">Search</button>
+          </div>
+          <div id="episodesOutput" class="list"></div>
+        </section>
+
+        <section id="exportTab" class="tab-panel" style="display:none;">
+          <div class="actions" style="margin-bottom: 12px;">
+            <button id="exportProfilesBtn" class="primary" data-i18n="exportProfiles">Export Profiles</button>
+          </div>
+          <div class="notice"><pre id="exportOutput"></pre></div>
+        </section>
+
+        <section id="diagnosticsTab" class="tab-panel" style="display:none;">
+          <div class="notice"><pre id="diagnosticsOutput"></pre></div>
+        </section>
+      </main>
+    </section>
+  </div>
+
+  <script src="/api/v1/plugins/_sdk/page-sdk.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let summary = null;
+
+    const text = {
+      empty: 'No data',
+      noScope: 'No memory scope selected.',
+      noKb: 'No memory knowledge base is configured.',
+      chooseScope: 'Choose a scope first.',
+      deriveFirst: 'Enter session_name and click Derive, or select a known scope.',
+      queryRequired: 'Enter a search query.',
+      delete: 'Delete',
+      confirmDelete: 'Delete this episode?',
+      kbReady: 'KB configured',
+      kbMissing: 'KB missing',
+      scopeReady: 'Scope selected',
+      scopeMissing: 'No scope',
+      allSpeakers: 'Session only',
+    };
+
+    function syncText() {
+      Object.keys(text).forEach((key) => {
+        text[key] = langbot.t(key, text[key]);
+      });
+    }
+
+    function value(id) { return $(id).value.trim(); }
+    function setValue(id, next) { $(id).value = next || ''; }
+    function numeric(id, fallback) {
+      const parsed = Number.parseInt($(id).value, 10);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    }
+    function escapeHtml(raw) {
+      return String(raw == null ? '' : raw)
+        .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;').replaceAll("'", '&#039;');
+    }
+    function readableError(err) {
+      if (!err) return 'Unknown error';
+      if (typeof err === 'string') return err;
+      if (err.message && err.message !== '[object Object]') return err.message;
+      try { return JSON.stringify(err, null, 2); } catch (_) { return String(err); }
+    }
+    function renderNotice(target, message, isError) {
+      target.innerHTML = '<div class="' + (isError ? 'notice error' : 'empty') + '">' + escapeHtml(message) + '</div>';
+    }
+    function renderError(target, err) { renderNotice(target, readableError(err), true); }
+    async function api(endpoint, body, method) {
+      return langbot.api(endpoint, body || null, method || 'POST');
+    }
+
+    function selectedScope() {
+      return {
+        scopeKey: value('scopeKey'),
+        userKey: value('userKey'),
+        senderId: value('senderId'),
+      };
+    }
+
+    function selectedKb() {
+      return {
+        collectionId: value('collectionId'),
+        embeddingModel: value('embeddingModel'),
+      };
+    }
+
+    function requireScope(target) {
+      const scope = selectedScope();
+      if (!scope.scopeKey || !scope.userKey) {
+        renderNotice(target, text.deriveFirst, true);
+        return null;
+      }
+      return scope;
+    }
+
+    function requireKb(target, needEmbedding) {
+      const kb = selectedKb();
+      if (!kb.collectionId) {
+        renderNotice(target, text.noKb, true);
+        return null;
+      }
+      if (needEmbedding && !kb.embeddingModel) {
+        renderNotice(target, 'embedding_model_uuid is required for search.', true);
+        return null;
+      }
+      return kb;
+    }
+
+    function setStatus(el, ok, label) {
+      el.textContent = label;
+      el.classList.toggle('ok', ok);
+      el.classList.toggle('warn', !ok);
+    }
+
+    function renderSummary(data) {
+      summary = data;
+      const kbEntries = data.kb_entries || [];
+      const scopes = data.scopes || [];
+
+      $('kbCount').textContent = data.kb_count;
+      $('profileCount').textContent = data.profile_key_count;
+      $('speakerProfileCount').textContent = data.speaker_profile_count;
+      setStatus($('kbStatus'), kbEntries.length > 0, kbEntries.length > 0 ? text.kbReady : text.kbMissing);
+      setStatus($('scopeStatus'), scopes.length > 0, scopes.length > 0 ? text.scopeReady : text.scopeMissing);
+
+      const cfg = data.plugin_config || {};
+      $('subtitle').textContent = 'max_profile_traits=' + (cfg.max_profile_traits || 20)
+        + ' · max_profile_preferences=' + (cfg.max_profile_preferences || 10);
+
+      renderKb(kbEntries);
+      renderScopeOptions(scopes);
+      $('diagnosticsOutput').textContent = JSON.stringify(data, null, 2);
+    }
+
+    function renderKb(entries) {
+      $('kbList').innerHTML = entries.length ? entries.map((kb) => (
+        '<div class="item">'
+        + '<div class="item-head"><div class="item-title">' + escapeHtml(kb.id) + '</div><span class="pill ok">' + escapeHtml(kb.isolation || 'session') + '</span></div>'
+        + '<div class="muted">' + escapeHtml(kb.embedding_model_uuid || '-') + '</div>'
+        + '</div>'
+      )).join('') : '<div class="empty">' + text.noKb + '</div>';
+
+      if (entries.length === 1) {
+        const kb = entries[0];
+        setValue('collectionId', value('collectionId') || kb.id);
+        setValue('embeddingModel', value('embeddingModel') || kb.embedding_model_uuid || '');
+        setValue('isolation', value('isolation') || kb.isolation || 'session');
+      }
+    }
+
+    function renderScopeOptions(scopes) {
+      const scopeSelect = $('scopeSelect');
+      const currentScope = value('scopeKey');
+      scopeSelect.innerHTML = scopes.length
+        ? scopes.map((scope, index) => '<option value="' + index + '">' + escapeHtml(scope.scope_key) + '</option>').join('')
+        : '<option value="">' + text.noScope + '</option>';
+      if (scopes.length) {
+        const selectedIndex = Math.max(0, scopes.findIndex((scope) => scope.scope_key === currentScope));
+        scopeSelect.value = String(selectedIndex);
+        applyScope(scopes[selectedIndex]);
+      }
+      else {
+        if (!currentScope) {
+          setValue('scopeKey', '');
+          setValue('userKey', '');
+          setValue('senderId', '');
+        }
+        updateScopePreview();
+        renderNotice($('profileOutput'), text.deriveFirst, false);
+      }
+    }
+
+    function applyScope(scope) {
+      setValue('scopeKey', scope.scope_key || '');
+      setValue('userKey', scope.user_key || scope.scope_key || '');
+      const speakerSelect = $('speakerSelect');
+      const speakers = scope.speaker_ids || [];
+      speakerSelect.innerHTML = '<option value="">' + text.allSpeakers + '</option>'
+        + speakers.map((speaker) => '<option value="' + escapeHtml(speaker) + '">' + escapeHtml(speaker) + '</option>').join('');
+      setValue('senderId', speakerSelect.value || '');
+      updateScopePreview();
+    }
+
+    function updateScopePreview() {
+      $('scopePreview').textContent = value('scopeKey') || '-';
+      $('userPreview').textContent = value('userKey') || '-';
+    }
+
+    async function refresh() {
+      $('refreshBtn').disabled = true;
+      try {
+        renderSummary(await langbot.api('/summary', null, 'GET'));
+      } catch (err) {
+        renderError($('profileOutput'), err);
+      } finally {
+        $('refreshBtn').disabled = false;
+      }
+    }
+
+    async function deriveScope() {
+      try {
+        const result = await api('/derive-scope', {
+          bot_uuid: value('botUuid'),
+          session_name: value('sessionName'),
+          isolation: value('isolation'),
+        });
+        setValue('scopeKey', result.session_key);
+        setValue('userKey', result.user_key);
+        updateScopePreview();
+        await loadProfile();
+      } catch (err) {
+        renderError($('profileOutput'), err);
+      }
+    }
+
+    function profilePanel(title, profile) {
+      const lines = [];
+      if (profile && profile.name) lines.push(['Name', profile.name]);
+      if (profile && profile.traits && profile.traits.length) lines.push(['Traits', profile.traits.join(', ')]);
+      if (profile && profile.preferences && profile.preferences.length) lines.push(['Preferences', profile.preferences.join(', ')]);
+      if (profile && profile.notes) lines.push(['Notes', profile.notes]);
+      if (profile && profile.updated_at) lines.push(['Updated', profile.updated_at]);
+      return '<div class="item"><h3>' + escapeHtml(langbot.t(title, title)) + '</h3>'
+        + (lines.length ? lines.map(([k, v]) => '<div><span class="muted">' + escapeHtml(langbot.t(k, k)) + ':</span> ' + escapeHtml(v) + '</div>').join('') : '<div class="muted">' + text.empty + '</div>')
+        + '</div>';
+    }
+
+    async function loadProfile() {
+      const target = $('profileOutput');
+      const scope = requireScope(target);
+      if (!scope) return;
+      try {
+        const data = await api('/profile', {
+          scope_key: scope.scopeKey,
+          sender_id: scope.senderId,
+        });
+        target.innerHTML = profilePanel('Session Profile', data.session_profile)
+          + profilePanel('Speaker Profile', data.speaker_profile);
+      } catch (err) {
+        renderError(target, err);
+      }
+    }
+
+    function renderEpisodes(target, episodes, mode) {
+      if (!episodes || episodes.length === 0) {
+        renderNotice(target, text.empty, false);
+        return;
+      }
+      target.innerHTML = episodes.map((ep) => {
+        const tags = (ep.tags || []).filter(Boolean).map((tag) => '<span class="pill">' + escapeHtml(tag) + '</span>').join('');
+        return '<article class="item">'
+          + '<div class="item-head"><div class="item-title">' + escapeHtml(ep.id || '-') + '</div><span class="muted">' + escapeHtml(ep.timestamp || '-') + '</span></div>'
+          + '<div>' + escapeHtml(ep.content || '') + '</div>'
+          + '<div class="tags">'
+          + '<span class="pill">importance ' + escapeHtml(ep.importance || 2) + '</span>'
+          + (ep.sender_name ? '<span class="pill">' + escapeHtml(ep.sender_name) + '</span>' : '')
+          + (ep.source ? '<span class="pill">' + escapeHtml(ep.source) + '</span>' : '')
+          + tags
+          + '</div>'
+          + '<div class="actions" style="margin-top: 10px;"><button class="danger" data-delete="' + escapeHtml(ep.id || '') + '">' + text.delete + '</button></div>'
+          + '</article>';
+      }).join('');
+      target.querySelectorAll('[data-delete]').forEach((button) => {
+        button.addEventListener('click', async () => {
+          const episodeId = button.getAttribute('data-delete');
+          if (!episodeId || !window.confirm(text.confirmDelete)) return;
+          const kb = requireKb(target, false);
+          const scope = requireScope(target);
+          if (!kb || !scope) return;
+          try {
+            await api('/episodes/delete', {
+              collection_id: kb.collectionId,
+              user_key: scope.userKey,
+              episode_id: episodeId,
+            });
+            if (mode === 'search') await searchEpisodes();
+            else await listEpisodes();
+          } catch (err) {
+            renderError(target, err);
+          }
+        });
+      });
+    }
+
+    async function listEpisodes() {
+      const target = $('episodesOutput');
+      const kb = requireKb(target, false);
+      const scope = requireScope(target);
+      if (!kb || !scope) return;
+      try {
+        const data = await api('/episodes/list', {
+          collection_id: kb.collectionId,
+          user_key: scope.userKey,
+          page: numeric('pageNo', 1),
+          page_size: 10,
+        });
+        renderEpisodes(target, data.episodes, 'list');
+      } catch (err) {
+        renderError(target, err);
+      }
+    }
+
+    async function searchEpisodes() {
+      const target = $('episodesOutput');
+      const kb = requireKb(target, true);
+      const scope = requireScope(target);
+      if (!kb || !scope) return;
+      if (!value('episodeQuery')) {
+        renderNotice(target, text.queryRequired, true);
+        return;
+      }
+      try {
+        const importanceRaw = $('importanceMin').value;
+        const data = await api('/episodes/search', {
+          collection_id: kb.collectionId,
+          embedding_model_uuid: kb.embeddingModel,
+          user_key: scope.userKey,
+          query: value('episodeQuery'),
+          top_k: numeric('topK', 10),
+          source: value('source'),
+          importance_min: importanceRaw ? Number.parseInt(importanceRaw, 10) : null,
+        });
+        renderEpisodes(target, data.episodes, 'search');
+      } catch (err) {
+        renderError(target, err);
+      }
+    }
+
+    async function exportProfiles() {
+      const target = $('exportOutput');
+      const scope = selectedScope();
+      if (!scope.scopeKey || !scope.userKey) {
+        target.textContent = text.deriveFirst;
+        return;
+      }
+      try {
+        target.textContent = JSON.stringify(await api('/export-profiles', {
+          scope_key: scope.scopeKey,
+        }), null, 2);
+      } catch (err) {
+        target.textContent = readableError(err);
+      }
+    }
+
+    function bindTabs() {
+      document.querySelectorAll('.tab').forEach((button) => {
+        button.addEventListener('click', () => {
+          document.querySelectorAll('.tab').forEach((tab) => tab.classList.remove('active'));
+          document.querySelectorAll('.tab-panel').forEach((panel) => panel.style.display = 'none');
+          button.classList.add('active');
+          $(button.dataset.tab + 'Tab').style.display = '';
+        });
+      });
+    }
+
+    langbot.onReady(async function () {
+      bindTabs();
+      syncText();
+      $('refreshBtn').addEventListener('click', refresh);
+      $('deriveBtn').addEventListener('click', deriveScope);
+      $('loadProfileBtn').addEventListener('click', loadProfile);
+      $('listEpisodesBtn').addEventListener('click', listEpisodes);
+      $('searchEpisodesBtn').addEventListener('click', searchEpisodes);
+      $('exportProfilesBtn').addEventListener('click', exportProfiles);
+      $('toggleDebugBtn').addEventListener('click', () => {
+        $('debugPanel').classList.toggle('open');
+        $('kbDebug').classList.toggle('open');
+      });
+      $('scopeSelect').addEventListener('change', () => {
+        const scopes = (summary && summary.scopes) || [];
+        const selected = scopes[Number.parseInt($('scopeSelect').value, 10)];
+        if (selected) applyScope(selected);
+      });
+      $('speakerSelect').addEventListener('change', () => {
+        setValue('senderId', $('speakerSelect').value);
+        loadProfile();
+      });
+      ['scopeKey', 'userKey', 'senderId'].forEach((id) => {
+        $(id).addEventListener('input', updateScopePreview);
+      });
+      await refresh();
+      await loadProfile();
+      langbot.applyI18n();
+    });
+  </script>
+</body>
+</html>
