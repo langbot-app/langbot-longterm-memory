@@ -6,9 +6,11 @@ from store.memory_store import MemoryStore
 
 
 class FakeVectorPlugin:
-    def __init__(self):
+    def __init__(self, *, fail_hybrid: bool = False):
         self.records: dict[str, dict] = {}
         self.upserts: list[tuple[str, dict]] = []
+        self.fail_hybrid = fail_hybrid
+        self.search_calls: list[dict] = []
 
     async def invoke_embedding(self, _embedding_model_uuid: str, texts: list[str]) -> list[list[float]]:
         return [[float(index + 1)] for index, _ in enumerate(texts)]
@@ -26,6 +28,9 @@ class FakeVectorPlugin:
             self.upserts.append((item_id, meta))
 
     async def vector_search(self, collection_id, query_vector, top_k=5, filters=None, **_kwargs):
+        self.search_calls.append(_kwargs)
+        if _kwargs.get("search_type") == "hybrid" and self.fail_hybrid:
+            raise RuntimeError("hybrid unavailable")
         return self._filtered(filters)[:top_k]
 
     async def vector_list(self, collection_id, filters=None, limit=20, offset=0):
@@ -198,3 +203,50 @@ async def test_update_episode_status_preserves_scope_and_metadata():
     assert plugin.records["ep-1"]["metadata"]["content"] == "Scoped memory"
     assert plugin.records["other"]["metadata"]["status"] == "active"
     assert missing is None
+
+
+@pytest.mark.asyncio
+async def test_search_episodes_uses_hybrid_and_falls_back_to_vector():
+    plugin = FakeVectorPlugin(fail_hybrid=True)
+    plugin.records = {
+        "ep-1": _record("ep-1", status="active", content="Hybrid fallback memory"),
+    }
+    store = MemoryStore(plugin)
+
+    results = await store.search_episodes(
+        collection_id="kb-1",
+        embedding_model_uuid="emb-1",
+        query="Hybrid",
+        user_key="user-1",
+        retrieval_strategy="auto",
+        vector_weight=0.6,
+    )
+
+    assert [item["id"] for item in results] == ["ep-1"]
+    assert plugin.search_calls[0] == {
+        "search_type": "hybrid",
+        "query_text": "Hybrid",
+        "vector_weight": 0.6,
+    }
+    assert plugin.search_calls[1] == {}
+
+
+@pytest.mark.asyncio
+async def test_search_episodes_exact_episode_id_does_not_depend_on_vector_similarity():
+    plugin = FakeVectorPlugin()
+    plugin.records = {
+        "episode-special": _record("episode-special", status="active", content="Exact ID memory"),
+        "other": _record("other", status="active", content="Other memory"),
+    }
+    store = MemoryStore(plugin)
+
+    results = await store.search_episodes(
+        collection_id="kb-1",
+        embedding_model_uuid="emb-1",
+        query="episode-special",
+        user_key="user-1",
+        top_k=1,
+        retrieval_strategy="vector",
+    )
+
+    assert [item["id"] for item in results] == ["episode-special"]

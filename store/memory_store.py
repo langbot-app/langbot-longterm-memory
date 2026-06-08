@@ -107,6 +107,44 @@ class MemoryStore:
         statuses = cls.normalize_episode_statuses(include_statuses)
         return cls.episode_status_from_metadata(metadata) in statuses
 
+    @staticmethod
+    def normalize_retrieval_strategy(value: Any) -> str:
+        strategy = str(value or "auto").strip().lower()
+        if strategy in {"vector", "hybrid", "auto"}:
+            return strategy
+        return "auto"
+
+    @staticmethod
+    def normalize_vector_weight(value: Any) -> float:
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            return 0.7
+
+    @staticmethod
+    def _metadata_exact_match_score(query: str, item_id: str, metadata: dict[str, Any]) -> float:
+        needle = query.strip().lower()
+        if not needle:
+            return 0.0
+        score = 0.0
+        if needle == str(item_id or "").strip().lower():
+            score += 2.0
+        for field in ("sender_id", "sender_name"):
+            value = str(metadata.get(field, "") or "").strip().lower()
+            if value and needle == value:
+                score += 1.2
+        tags = {
+            tag.strip().lower()
+            for tag in str(metadata.get("tags", "") or "").split(",")
+            if tag.strip()
+        }
+        if needle in tags:
+            score += 1.2
+        content = str(metadata.get("content", "") or "").lower()
+        if needle and needle in content:
+            score += 0.6
+        return score
+
     # ======================== common helpers ========================
 
     @staticmethod
@@ -1104,12 +1142,15 @@ class MemoryStore:
         importance_min: int | None = None,
         source: str = "",
         include_statuses: list[str] | set[str] | tuple[str, ...] | None = None,
+        retrieval_strategy: str = "auto",
+        vector_weight: float | None = None,
+        exact_match_boost: bool = True,
     ) -> list[dict[str, Any]]:
         """Search episodic memories via vector similarity."""
         if not query.strip():
             return []
         logger.info(
-            "[LongTermMemory] search_episodes: collection_id=%s user_key=%s sender_id=%s sender_name=%s top_k=%s source=%s importance_min=%s time_after=%s time_before=%s statuses=%s query_len=%s",
+            "[LongTermMemory] search_episodes: collection_id=%s user_key=%s sender_id=%s sender_name=%s top_k=%s source=%s importance_min=%s time_after=%s time_before=%s statuses=%s strategy=%s query_len=%s",
             collection_id,
             user_key,
             sender_id,
@@ -1120,6 +1161,7 @@ class MemoryStore:
             time_after,
             time_before,
             sorted(self.normalize_episode_statuses(include_statuses)),
+            self.normalize_retrieval_strategy(retrieval_strategy),
             len(query),
         )
 
@@ -1151,13 +1193,45 @@ class MemoryStore:
         if len(filters) > 1:
             filters = {"$and": [{k: v} for k, v in filters.items()]}
 
+        exact_episode = None
+        if exact_match_boost and user_key:
+            exact_episode = await self.get_episode_by_id(
+                collection_id=collection_id,
+                episode_id=query.strip(),
+                user_key=user_key,
+            )
+
         fetch_k = max(top_k, top_k * 4, 50)
-        results = await self.plugin.vector_search(
-            collection_id=collection_id,
-            query_vector=query_vector,
-            top_k=fetch_k,
-            filters=filters if filters else None,
-        )
+        strategy = self.normalize_retrieval_strategy(retrieval_strategy)
+        normalized_weight = self.normalize_vector_weight(vector_weight)
+        search_kwargs = {
+            "collection_id": collection_id,
+            "query_vector": query_vector,
+            "top_k": fetch_k,
+            "filters": filters if filters else None,
+        }
+        if strategy in {"auto", "hybrid"}:
+            try:
+                results = await self.plugin.vector_search(
+                    **search_kwargs,
+                    search_type="hybrid",
+                    query_text=query,
+                    vector_weight=normalized_weight,
+                )
+            except Exception:
+                if strategy == "hybrid":
+                    logger.warning(
+                        "[LongTermMemory] hybrid search failed; falling back to vector search",
+                        exc_info=True,
+                    )
+                else:
+                    logger.info(
+                        "[LongTermMemory] auto hybrid search unavailable; falling back to vector search",
+                        exc_info=True,
+                    )
+                results = await self.plugin.vector_search(**search_kwargs)
+        else:
+            results = await self.plugin.vector_search(**search_kwargs)
         logger.info(
             "[LongTermMemory] search_episodes completed: collection_id=%s raw_result_count=%s filters=%s",
             collection_id,
@@ -1165,13 +1239,31 @@ class MemoryStore:
             filters if filters else None,
         )
 
+        seen_ids: set[str] = set()
         episodes = []
+        if exact_episode and self.episode_status_included(
+            exact_episode.get("metadata", {}),
+            include_statuses,
+        ):
+            exact_episode["score"] = 1.0
+            exact_episode["_exact_match_score"] = 2.0
+            episodes.append(exact_episode)
+            seen_ids.add(exact_episode["id"])
+
         for r in results:
+            rid = r.get("id", "")
+            if rid in seen_ids:
+                continue
             meta = r.get("metadata", {})
             if not self.episode_status_included(meta, include_statuses):
                 continue
+            exact_score = (
+                self._metadata_exact_match_score(query, rid, meta)
+                if exact_match_boost
+                else 0.0
+            )
             episodes.append({
-                "id": r.get("id", ""),
+                "id": rid,
                 "content": meta.get("content", ""),
                 "tags": meta.get("tags", "").split(",") if meta.get("tags") else [],
                 "importance": int(meta.get("importance", "2")),
@@ -1182,10 +1274,22 @@ class MemoryStore:
                 "status": self.episode_status_from_metadata(meta),
                 "superseded_by": meta.get("superseded_by", ""),
                 "score": r.get("score"),
+                "_exact_match_score": exact_score,
             })
             if len(episodes) >= top_k:
                 break
-        return episodes
+
+        if exact_match_boost:
+            episodes.sort(
+                key=lambda ep: (
+                    float(ep.get("_exact_match_score", 0.0)),
+                    float(ep.get("score") or 0.0),
+                ),
+                reverse=True,
+            )
+        for ep in episodes:
+            ep.pop("_exact_match_score", None)
+        return episodes[:top_k]
 
     async def delete_episodes_by_user(
         self, collection_id: str, user_key: str

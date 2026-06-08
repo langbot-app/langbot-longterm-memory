@@ -63,6 +63,52 @@ spec:
       required: false
       default: 3
 
+    - name: retrieval_strategy
+      label:
+        en_US: Retrieval Strategy
+        zh_Hans: 检索策略
+      description:
+        en_US: "auto tries hybrid search first and falls back to vector search. Use vector for maximum backend compatibility."
+        zh_Hans: "auto 会优先尝试混合检索，失败时回退向量检索。vector 兼容性最好。"
+      type: select
+      options:
+        - name: auto
+          label:
+            en_US: Auto
+            zh_Hans: 自动
+        - name: vector
+          label:
+            en_US: Vector
+            zh_Hans: 向量
+        - name: hybrid
+          label:
+            en_US: Hybrid
+            zh_Hans: 混合
+      required: false
+      default: auto
+
+    - name: vector_weight
+      label:
+        en_US: Vector Weight
+        zh_Hans: 向量权重
+      description:
+        en_US: Vector similarity weight used by hybrid search.
+        zh_Hans: 混合检索中的向量相似度权重。
+      type: number
+      required: false
+      default: 0.7
+
+    - name: exact_match_boost
+      label:
+        en_US: Exact Match Boost
+        zh_Hans: 精确匹配增强
+      description:
+        en_US: Boost exact matches on episode IDs, sender identity, tags, and content snippets.
+        zh_Hans: 对 episode ID、说话人、标签和内容片段的精确匹配进行增强。
+      type: boolean
+      required: false
+      default: true
+
   retrieval_schema:
     - name: top_k
       label:

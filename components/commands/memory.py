@@ -503,6 +503,9 @@ class Memory(Command):
                 user_key=ctx.user_key,
                 top_k=10,
                 include_statuses=include_statuses,
+                retrieval_strategy=ctx.config.get("retrieval_strategy", "auto"),
+                vector_weight=ctx.config.get("vector_weight", 0.7),
+                exact_match_boost=bool(ctx.config.get("exact_match_boost", True)),
             )
 
             if not episodes:
