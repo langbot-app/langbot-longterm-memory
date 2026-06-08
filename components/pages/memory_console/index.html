@@ -595,6 +595,7 @@
           + '<div class="item-head"><div class="item-title">' + escapeHtml(ep.id || '-') + '</div><span class="muted">' + escapeHtml(ep.timestamp || '-') + '</span></div>'
           + '<div>' + escapeHtml(ep.content || '') + '</div>'
           + '<div class="tags">'
+          + '<span class="pill">' + escapeHtml(ep.status || 'active') + '</span>'
           + '<span class="pill">importance ' + escapeHtml(ep.importance || 2) + '</span>'
           + (ep.sender_name ? '<span class="pill">' + escapeHtml(ep.sender_name) + '</span>' : '')
           + (ep.source ? '<span class="pill">' + escapeHtml(ep.source) + '</span>' : '')

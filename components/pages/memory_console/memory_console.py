@@ -75,6 +75,22 @@ class MemoryConsolePage(Page):
         public.pop("freeform_preferences", None)
         return public
 
+    def _statuses(self, body: dict[str, Any]) -> list[str] | None:
+        raw = body.get("statuses")
+        if raw is None:
+            return None
+        if not isinstance(raw, list):
+            raise ValueError("statuses must be a list")
+        statuses = []
+        for item in raw:
+            status = str(item).strip().lower()
+            if status not in self._store.EPISODE_STATUSES:
+                raise ValueError(
+                    "statuses must contain only active, superseded, archived, or deleted"
+                )
+            statuses.append(status)
+        return statuses or None
+
     async def _summary(self) -> dict[str, Any]:
         store = self._store
         kb_configs = await store.get_kb_configs()
@@ -206,6 +222,7 @@ class MemoryConsolePage(Page):
             user_key=user_key,
             limit=page_size,
             offset=offset,
+            include_statuses=self._statuses(body),
         )
         return {
             "episodes": episodes,
@@ -238,6 +255,7 @@ class MemoryConsolePage(Page):
             time_before=self._string(body, "time_before"),
             importance_min=importance_min,
             source=self._string(body, "source"),
+            include_statuses=self._statuses(body),
         )
         return {"episodes": episodes, "count": len(episodes)}
 

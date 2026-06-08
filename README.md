@@ -264,7 +264,18 @@ That is intentional:
    - `update_profile` for stable preferences and profile data
    - `forget` to delete a specific episodic memory by ID
 5. Run `!memory health` in a pipeline that includes the memory KB. Treat `ERROR` as a setup problem before relying on scoped recall.
-6. Use `!memory`, `!memory profile`, `!memory search <query>`, `!memory list [page]`, `!memory forget <id>`, and `!memory export` to inspect behavior.
+6. Use `!memory`, `!memory profile`, `!memory search <query>`, `!memory list [page]`, `!memory forget <id>`, and `!memory export` to inspect behavior. `!memory list` and `!memory search` show active episodes by default; add `--include-superseded`, `--include-archived`, or `--status <status>` when explicitly inspecting hidden lifecycle states.
+
+## Episode Lifecycle
+
+L2 episodes carry a lifecycle `status` metadata field:
+
+- `active`: default state for new episodes and eligible for normal recall
+- `superseded`: replaced by a newer correction or fact update
+- `archived`: retained for history, excluded from normal recall
+- `deleted`: reserved for tombstones or future audit workflows
+
+Existing records without `status` are treated as `active`, so no migration is required. Automatic recall and `recall_memory` only return active episodes by default. Correction-style writes mark similar older active episodes as `superseded`, which keeps them inspectable through explicit management commands without letting them compete with current memory.
 
 ## Context Sharing for Other Plugins
 
