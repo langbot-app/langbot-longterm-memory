@@ -371,6 +371,7 @@ class LongTermMemoryEngine(KnowledgeEngine):
         batch_texts: list[str] = []
         batch_ids: list[str] = []
         batch_metas: list[dict[str, Any]] = []
+        imported_by_user: dict[str, int] = {}
 
         for mem in memories:
             content = mem.get("content", "")
@@ -397,6 +398,8 @@ class LongTermMemoryEngine(KnowledgeEngine):
             status = self.plugin.memory_store.normalize_episode_status_value(
                 mem.get("status", "active")
             )
+            user_key_text = str(user_key or "imported")
+            imported_by_user[user_key_text] = imported_by_user.get(user_key_text, 0) + 1
 
             mid = uuid_mod.uuid4().hex[:12]
             batch_texts.append(content)
@@ -427,6 +430,20 @@ class LongTermMemoryEngine(KnowledgeEngine):
             )
 
         logger.info("Ingestion complete: %d memories stored", total_stored)
+        for user_key, count in imported_by_user.items():
+            await self.plugin.memory_store.append_audit_entry(
+                scope_key=user_key,
+                user_key=user_key,
+                operation="import_l2",
+                target_type="document",
+                target_id=doc_id,
+                summary=f"Imported {count} L2 episode(s) from {filename}",
+                metadata={
+                    "kb_id": collection_id,
+                    "filename": filename,
+                    "count": count,
+                },
+            )
         return IngestionResult(
             document_id=doc_id,
             status=DocumentStatus.COMPLETED,
@@ -476,5 +493,13 @@ class LongTermMemoryEngine(KnowledgeEngine):
             kb_id,
             document_id,
             count,
+        )
+        await self.plugin.memory_store.append_audit_entry(
+            scope_key=f"document:{document_id}",
+            operation="delete_document",
+            target_type="document",
+            target_id=document_id,
+            summary=f"Deleted imported memory document {document_id}",
+            metadata={"kb_id": kb_id, "deleted": count},
         )
         return count > 0

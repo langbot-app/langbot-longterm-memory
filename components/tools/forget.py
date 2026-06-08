@@ -23,7 +23,8 @@ class Forget(Tool):
             plugin_runtime_handler=self.plugin.plugin_runtime_handler,
         )
         bot_uuid = await api.get_bot_uuid()
-        _, user_key, kb_id, _, config = await store.resolve_user_context(
+        query_vars = await api.get_query_vars()
+        session_key, user_key, kb_id, _, config = await store.resolve_user_context(
             session, bot_uuid
         )
 
@@ -42,10 +43,22 @@ class Forget(Tool):
             episode_id,
         )
 
-        await store.delete_episode_by_id(
+        deleted = await store.delete_episode_by_id(
             collection_id=kb_id,
             episode_id=episode_id,
             user_key=user_key,
+        )
+        await store.append_audit_entry(
+            scope_key=session_key,
+            user_key=user_key,
+            operation="forget",
+            target_type="episode",
+            target_id=str(episode_id),
+            summary=f"Deleted episode {episode_id}",
+            sender_id=str(query_vars.get("sender_id", "") or ""),
+            sender_name=str(query_vars.get("sender_name", "") or ""),
+            query_id=query_id,
+            metadata={"kb_id": kb_id, "deleted": deleted},
         )
 
         return f"Deleted episode {episode_id}."

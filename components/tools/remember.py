@@ -36,7 +36,7 @@ class Remember(Tool):
         )
         bot_uuid = await api.get_bot_uuid()
         query_vars = await api.get_query_vars()
-        _, user_key, kb_id, _, config = await store.resolve_user_context(
+        session_key, user_key, kb_id, _, config = await store.resolve_user_context(
             session, bot_uuid
         )
 
@@ -88,6 +88,23 @@ class Remember(Tool):
             episode["id"],
             user_key,
             len(str(content)),
+        )
+        await store.append_audit_entry(
+            scope_key=session_key,
+            user_key=user_key,
+            operation="remember",
+            target_type="episode",
+            target_id=episode["id"],
+            summary=self._preview_text(str(content)),
+            sender_id=sender_id,
+            sender_name=sender_name,
+            query_id=query_id,
+            metadata={
+                "kb_id": kb_id,
+                "tags": tags,
+                "importance": importance,
+                "status": episode.get("status", "active"),
+            },
         )
 
         return f"Remembered: {content}"
