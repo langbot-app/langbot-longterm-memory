@@ -19,7 +19,9 @@ Long-term memory plugin for LangBot with a dual-layer design:
 - Provides `!memory search <query>` to search episodes (results include episode IDs)
 - Provides `!memory health` to verify KB configuration and metadata-filter isolation
 - Provides a `!memory export` command to export L1 profiles for the current session as JSON
+- Provides `!memory export l2`, `!memory import l2 <json>`, and scoped `!memory delete` commands for L2 governance
 - Provides `!memory audit [page|export]` to inspect scoped memory change history
+- Provides `!memory consolidate preview|run` for preview-first scoped L2 cleanup
 - Automatically supersedes related older episodes when a correction/fact-update/clarification is stored
 
 ## Overall Design
@@ -289,7 +291,7 @@ That is intentional:
    - `update_profile` for stable preferences and profile data
    - `forget` to delete a specific episodic memory by ID
 5. Run `!memory health` in a pipeline that includes the memory KB. Treat `ERROR` as a setup problem before relying on scoped recall.
-6. Use `!memory`, `!memory profile`, `!memory search <query>`, `!memory list [page]`, `!memory forget <id>`, and `!memory export` to inspect behavior. `!memory list` and `!memory search` show active episodes by default; add `--include-superseded`, `--include-archived`, or `--status <status>` when explicitly inspecting hidden lifecycle states.
+6. Use `!memory`, `!memory profile`, `!memory search <query>`, `!memory list [page]`, `!memory forget <id>`, `!memory export`, and `!memory consolidate preview` to inspect behavior. `!memory list` and `!memory search` show active episodes by default; add `--include-superseded`, `--include-archived`, or `--status <status>` when explicitly inspecting hidden lifecycle states.
 
 ## Episode Lifecycle
 
@@ -311,6 +313,19 @@ Use `!memory audit [page]` to inspect recent entries for the current scope, or `
 ## Managing Hidden Episodes
 
 Use `!memory show <episode_id>` to inspect one episode, including status, sender, source, tags, importance, and supersede metadata. Use `!memory superseded [page]` and `!memory archived [page]` to inspect records hidden from normal recall. Use `!memory archive <episode_id>` to hide an active episode without deleting it, and `!memory restore <episode_id>` to make an archived or superseded episode active again. Archive and restore operations write audit entries.
+
+## Memory Consolidation
+
+Use `!memory consolidate preview` to inspect cleanup candidates for the current scope. Preview never modifies memory. It reports candidate episode IDs, a deterministic summary episode proposal, possible profile updates, episodes that would be archived, and risk notes.
+
+Use `!memory consolidate run` only after setting `consolidation_enabled=true` on the memory knowledge base. Run applies only the current `user_key` scope. It can archive selected active or superseded episodes and write one summary episode tagged `consolidation` and `summary`. Every archive and summary write creates scoped audit entries. Profile update application is disabled by default through `consolidation_apply_profile_updates=false`.
+
+Relevant knowledge base settings:
+
+- `consolidation_enabled`: default `false`; required for `run`
+- `consolidation_min_age_days`: default `7`
+- `consolidation_max_candidates`: default `20`
+- `consolidation_apply_profile_updates`: default `false`
 
 ## Retrieval Strategy
 

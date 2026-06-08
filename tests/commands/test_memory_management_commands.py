@@ -33,6 +33,9 @@ class FakeStore:
         self.export_calls: list[dict] = []
         self.import_calls: list[dict] = []
         self.delete_calls: list[dict] = []
+        self.preview_calls: list[dict] = []
+        self.apply_calls: list[dict] = []
+        self.consolidation_enabled = False
 
     async def resolve_user_context(self, session, bot_uuid: str = ""):
         return (
@@ -40,7 +43,13 @@ class FakeStore:
             "bot-1:group_1",
             "kb-1",
             "session",
-            {"embedding_model_uuid": "emb-1"},
+            {
+                "embedding_model_uuid": "emb-1",
+                "consolidation_enabled": self.consolidation_enabled,
+                "consolidation_min_age_days": 7,
+                "consolidation_max_candidates": 20,
+                "consolidation_apply_profile_updates": False,
+            },
         )
 
     async def get_episode_by_id(self, collection_id, episode_id, user_key):
@@ -153,6 +162,57 @@ class FakeStore:
             "include_statuses": include_statuses,
         })
         return 2, ["archived-1", "archived-2"]
+
+    async def preview_consolidation(
+        self,
+        collection_id,
+        user_key,
+        min_age_days=7,
+        max_candidates=20,
+        apply_profile_updates=False,
+    ):
+        self.preview_calls.append({
+            "collection_id": collection_id,
+            "user_key": user_key,
+            "min_age_days": min_age_days,
+            "max_candidates": max_candidates,
+            "apply_profile_updates": apply_profile_updates,
+        })
+        return {
+            "candidate_episode_ids": ["old-1", "old-2"],
+            "candidates": [],
+            "summary_episode": "Consolidated two old memories.",
+            "profile_updates": [],
+            "episodes_to_archive": ["old-1", "old-2"],
+            "risk_notes": ["Preview is read-only."],
+        }
+
+    async def apply_consolidation(
+        self,
+        collection_id,
+        embedding_model_uuid,
+        user_key,
+        min_age_days=7,
+        max_candidates=20,
+        apply_profile_updates=False,
+    ):
+        self.apply_calls.append({
+            "collection_id": collection_id,
+            "embedding_model_uuid": embedding_model_uuid,
+            "user_key": user_key,
+            "min_age_days": min_age_days,
+            "max_candidates": max_candidates,
+            "apply_profile_updates": apply_profile_updates,
+        })
+        return {
+            "preview": {
+                "candidate_episode_ids": ["old-1", "old-2"],
+                "episodes_to_archive": ["old-1", "old-2"],
+            },
+            "archived_episode_ids": ["old-1", "old-2"],
+            "summary_episode": {"id": "summary-1", "content": "summary"},
+            "profile_updates_applied": [],
+        }
 
     async def append_audit_entry(self, **entry):
         self.audit_entries.append(entry)
@@ -303,4 +363,54 @@ async def test_memory_delete_l2_bulk_is_scoped_and_writes_audit(monkeypatch):
     assert plugin.memory_store.audit_entries[-1]["metadata"]["episode_ids"] == [
         "archived-1",
         "archived-2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_memory_consolidate_preview_is_read_only(monkeypatch):
+    monkeypatch.setattr("components.commands.memory.QueryBasedAPIProxy", lambda **_: FakeAPI())
+    command = Memory()
+    plugin = FakePlugin()
+    command.plugin = plugin
+
+    output = await _run(command, "consolidate", ["preview"])
+
+    assert "Candidates: 2" in output
+    assert "Summary episode: Consolidated two old memories." in output
+    assert plugin.memory_store.preview_calls
+    assert plugin.memory_store.apply_calls == []
+    assert plugin.memory_store.audit_entries == []
+
+
+@pytest.mark.asyncio
+async def test_memory_consolidate_run_requires_enabled_config(monkeypatch):
+    monkeypatch.setattr("components.commands.memory.QueryBasedAPIProxy", lambda **_: FakeAPI())
+    command = Memory()
+    plugin = FakePlugin()
+    command.plugin = plugin
+
+    output = await _run(command, "consolidate", ["run"])
+
+    assert "Consolidation run is disabled" in output
+    assert plugin.memory_store.apply_calls == []
+    assert plugin.memory_store.audit_entries == []
+
+
+@pytest.mark.asyncio
+async def test_memory_consolidate_run_writes_audit(monkeypatch):
+    monkeypatch.setattr("components.commands.memory.QueryBasedAPIProxy", lambda **_: FakeAPI())
+    command = Memory()
+    plugin = FakePlugin()
+    plugin.memory_store.consolidation_enabled = True
+    command.plugin = plugin
+
+    output = await _run(command, "consolidate", ["run"])
+
+    assert "archived 2 episode" in output
+    assert plugin.memory_store.apply_calls[0]["user_key"] == "bot-1:group_1"
+    assert [entry["operation"] for entry in plugin.memory_store.audit_entries] == [
+        "consolidate_archive",
+        "consolidate_archive",
+        "consolidate_summary",
+        "consolidate_run",
     ]

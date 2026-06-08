@@ -1125,6 +1125,10 @@ class MemoryStore:
             "tags": tags,
             "importance": importance,
             "timestamp": timestamp,
+            "user_key": user_key,
+            "sender_id": sender_id,
+            "sender_name": sender_name,
+            "source": source,
             "status": self.EPISODE_STATUS_ACTIVE,
         }
 
@@ -1536,6 +1540,172 @@ class MemoryStore:
                 user_key=user_key,
             )
         return deleted, matched_ids
+
+    @staticmethod
+    def _age_days(timestamp: str, now: datetime | None = None) -> float | None:
+        text = str(timestamp or "").strip()
+        if not text:
+            return None
+        try:
+            ts = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        now_dt = now or datetime.now(timezone.utc)
+        return max(0.0, (now_dt - ts.astimezone(timezone.utc)).total_seconds() / 86400.0)
+
+    @staticmethod
+    def _summarize_consolidation_candidates(candidates: list[dict[str, Any]]) -> str:
+        if not candidates:
+            return ""
+
+        tag_counts: dict[str, int] = {}
+        sender_counts: dict[str, int] = {}
+        for episode in candidates:
+            for tag in episode.get("tags", []):
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+            sender = episode.get("sender_name") or episode.get("sender_id") or ""
+            if sender:
+                sender_counts[sender] = sender_counts.get(sender, 0) + 1
+
+        top_tags = sorted(tag_counts.items(), key=lambda item: item[1], reverse=True)[:5]
+        top_senders = sorted(sender_counts.items(), key=lambda item: item[1], reverse=True)[:3]
+        parts = [f"Consolidated {len(candidates)} older or hidden memory episodes."]
+        if top_tags:
+            parts.append(
+                "Top tags: " + ", ".join(f"{tag} ({count})" for tag, count in top_tags)
+            )
+        if top_senders:
+            parts.append(
+                "Speakers: "
+                + ", ".join(f"{sender} ({count})" for sender, count in top_senders)
+            )
+        return " ".join(parts)
+
+    async def preview_consolidation(
+        self,
+        collection_id: str,
+        user_key: str,
+        *,
+        min_age_days: int = 7,
+        max_candidates: int = 20,
+        apply_profile_updates: bool = False,
+    ) -> dict[str, Any]:
+        """Build a no-write consolidation preview for one user_key scope."""
+        max_candidates = max(1, min(100, int(max_candidates or 20)))
+        min_age_days = max(0, int(min_age_days or 0))
+        episodes = await self.export_episodes_by_user(
+            collection_id=collection_id,
+            user_key=user_key,
+            include_statuses=sorted(self.EPISODE_STATUSES),
+        )
+
+        candidates: list[dict[str, Any]] = []
+        archive_ids: list[str] = []
+        risk_notes: list[str] = []
+        now = datetime.now(timezone.utc)
+        for episode in episodes:
+            status = episode.get("status", self.EPISODE_STATUS_ACTIVE)
+            importance = int(episode.get("importance", 2) or 2)
+            age_days = self._age_days(str(episode.get("timestamp", "") or ""), now)
+            reasons: list[str] = []
+            if status == self.EPISODE_STATUS_SUPERSEDED:
+                reasons.append("already superseded")
+            elif status == self.EPISODE_STATUS_ARCHIVED:
+                reasons.append("already archived")
+            elif (
+                status == self.EPISODE_STATUS_ACTIVE
+                and age_days is not None
+                and age_days >= min_age_days
+                and importance <= 2
+            ):
+                reasons.append(f"active low-importance memory older than {min_age_days} days")
+
+            if not reasons:
+                continue
+
+            candidate = dict(episode)
+            candidate["consolidation_reasons"] = reasons
+            candidate["age_days"] = age_days
+            candidates.append(candidate)
+            if status != self.EPISODE_STATUS_ARCHIVED:
+                archive_ids.append(episode["id"])
+            if len(candidates) >= max_candidates:
+                break
+
+        if len(episodes) > len(candidates):
+            risk_notes.append(
+                f"Preview limited to {len(candidates)} candidate(s) from {len(episodes)} scoped episodes."
+            )
+        if not apply_profile_updates:
+            risk_notes.append("Profile update application is disabled by default.")
+        if archive_ids:
+            risk_notes.append("Run will archive selected active/superseded episodes in this scope only.")
+
+        summary_episode = ""
+        if len(candidates) >= 2:
+            summary_episode = self._summarize_consolidation_candidates(candidates)
+
+        return {
+            "candidate_episode_ids": [episode["id"] for episode in candidates],
+            "candidates": candidates,
+            "summary_episode": summary_episode,
+            "profile_updates": [] if not apply_profile_updates else [],
+            "episodes_to_archive": archive_ids,
+            "risk_notes": risk_notes,
+            "min_age_days": min_age_days,
+            "max_candidates": max_candidates,
+        }
+
+    async def apply_consolidation(
+        self,
+        collection_id: str,
+        embedding_model_uuid: str,
+        user_key: str,
+        *,
+        min_age_days: int = 7,
+        max_candidates: int = 20,
+        apply_profile_updates: bool = False,
+    ) -> dict[str, Any]:
+        """Apply scoped consolidation by writing a summary and archiving candidates."""
+        preview = await self.preview_consolidation(
+            collection_id=collection_id,
+            user_key=user_key,
+            min_age_days=min_age_days,
+            max_candidates=max_candidates,
+            apply_profile_updates=apply_profile_updates,
+        )
+        archived: list[str] = []
+        for episode_id in preview["episodes_to_archive"]:
+            episode = await self.update_episode_status(
+                collection_id=collection_id,
+                embedding_model_uuid=embedding_model_uuid,
+                episode_id=episode_id,
+                user_key=user_key,
+                status=self.EPISODE_STATUS_ARCHIVED,
+            )
+            if episode:
+                archived.append(episode_id)
+
+        summary = None
+        if preview.get("summary_episode"):
+            summary = await self.add_episode(
+                collection_id=collection_id,
+                embedding_model_uuid=embedding_model_uuid,
+                user_key=user_key,
+                content=preview["summary_episode"],
+                tags=["consolidation", "summary"],
+                importance=2,
+                source="consolidation",
+            )
+
+        return {
+            "preview": preview,
+            "archived_episode_ids": archived,
+            "summary_episode": summary,
+            "profile_updates_applied": [],
+        }
 
     async def delete_episode_by_id(
         self,
