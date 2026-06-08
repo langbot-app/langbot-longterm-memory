@@ -419,3 +419,74 @@ async def test_apply_consolidation_archives_scoped_candidates_and_writes_summary
     assert summary is not None
     assert summary["source"] == "consolidation"
     assert {"consolidation", "summary"} == set(summary["tags"])
+
+
+class FakeStorageVectorPlugin(FakeVectorPlugin):
+    def __init__(self):
+        super().__init__()
+        self.storage: dict[str, bytes] = {}
+
+    async def get_plugin_storage(self, key: str) -> bytes:
+        if key not in self.storage:
+            raise KeyError(key)
+        return self.storage[key]
+
+    async def set_plugin_storage(self, key: str, value: bytes) -> None:
+        self.storage[key] = value
+
+
+@pytest.mark.asyncio
+async def test_memory_candidate_reject_remains_inspectable():
+    plugin = FakeStorageVectorPlugin()
+    store = MemoryStore(plugin)
+
+    candidate = await store.append_memory_candidate(
+        scope_key="scope-1",
+        user_key="user-1",
+        candidate_type="l2_episode",
+        payload={"content": "Alice has a meeting tomorrow", "tags": ["candidate"]},
+        reason="Temporal fact",
+    )
+    rejected = await store.reject_memory_candidate("scope-1", candidate["candidate_id"])
+    pending, pending_total = await store.list_memory_candidates("scope-1")
+    rejected_items, rejected_total = await store.list_memory_candidates(
+        "scope-1",
+        include_statuses=["rejected"],
+    )
+
+    assert rejected["status"] == "rejected"
+    assert pending == []
+    assert pending_total == 0
+    assert rejected_total == 1
+    assert rejected_items[0]["candidate_id"] == candidate["candidate_id"]
+
+
+@pytest.mark.asyncio
+async def test_accept_l2_candidate_uses_normal_episode_write_path():
+    plugin = FakeStorageVectorPlugin()
+    store = MemoryStore(plugin)
+    candidate = await store.append_memory_candidate(
+        scope_key="scope-1",
+        user_key="user-1",
+        candidate_type="l2_episode",
+        payload={"content": "Alice has a meeting tomorrow", "tags": ["schedule"]},
+        reason="Temporal fact",
+        sender_id="u-1",
+        sender_name="Alice",
+    )
+
+    accepted = await store.accept_memory_candidate(
+        "scope-1",
+        candidate["candidate_id"],
+        collection_id="kb-1",
+        embedding_model_uuid="emb-1",
+        user_key="user-1",
+        bot_uuid="bot-1",
+    )
+
+    assert accepted["status"] == "accepted"
+    assert accepted["accepted_result"]["type"] == "episode"
+    episode = accepted["accepted_result"]["episode"]
+    assert episode["source"] == "candidate"
+    assert episode["sender_id"] == "u-1"
+    assert episode["id"] in plugin.records

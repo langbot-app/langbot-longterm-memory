@@ -22,6 +22,7 @@ Long-term memory plugin for LangBot with a dual-layer design:
 - Provides `!memory export l2`, `!memory import l2 <json>`, and scoped `!memory delete` commands for L2 governance
 - Provides `!memory audit [page|export]` to inspect scoped memory change history
 - Provides `!memory consolidate preview|run` for preview-first scoped L2 cleanup
+- Provides optional `!memory candidates` and `!memory candidate accept|reject` review workflow for extracted memory candidates
 - Automatically supersedes related older episodes when a correction/fact-update/clarification is stored
 
 ## Overall Design
@@ -326,6 +327,18 @@ Relevant knowledge base settings:
 - `consolidation_min_age_days`: default `7`
 - `consolidation_max_candidates`: default `20`
 - `consolidation_apply_profile_updates`: default `false`
+
+## Memory Candidate Extraction
+
+Candidate extraction is disabled by default because automatic memory writes can pollute both L1 profiles and L2 episodic recall, especially in group chats. Enable it only when you want a review queue for possible memory writes:
+
+- `candidate_extraction_enabled`: default `false`
+- `candidate_auto_apply`: default `false`
+- `candidate_max_per_turn`: default `3`
+
+When enabled, the plugin listens to the existing `NormalMessageResponded` event and stores conservative memory candidates for the current scope. Candidates do not modify L1 or L2 unless accepted. Use `!memory candidates [page]` to list pending candidates, `!memory candidates --all-statuses` to inspect accepted and rejected candidates, `!memory candidate accept <candidate_id>` to apply one candidate through the normal profile or episode write path, and `!memory candidate reject <candidate_id>` to keep a rejected candidate inspectable without writing memory.
+
+Keep `candidate_auto_apply=false` for normal deployments. If `candidate_auto_apply=true`, extracted candidates are accepted immediately and audit entries are written, but this increases the risk of low-value or ambiguous facts entering long-term memory.
 
 ## Retrieval Strategy
 

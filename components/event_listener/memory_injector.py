@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from langbot_plugin.api.definition.components.common.event_listener import EventListener
 from langbot_plugin.api.entities import events, context
@@ -32,6 +33,13 @@ class MemoryInjector(EventListener):
                 await self._inject_profile(event_ctx)
             except Exception:
                 logger.exception("Failed to inject profile")
+
+        @self.handler(events.NormalMessageResponded)
+        async def on_normal_message_responded(event_ctx: context.EventContext):
+            try:
+                await self._extract_memory_candidates(event_ctx)
+            except Exception:
+                logger.exception("Failed to extract memory candidates")
 
     @staticmethod
     def _resolve_auto_recall_top_k(config: dict) -> int:
@@ -235,3 +243,214 @@ class MemoryInjector(EventListener):
         event_ctx.event.default_prompt.append(
             Message(role="system", content=injection)
         )
+
+    @staticmethod
+    def _candidate_config(config: dict) -> dict:
+        def as_int(key: str, default: int) -> int:
+            try:
+                return int(config.get(key, default))
+            except (TypeError, ValueError):
+                return default
+
+        return {
+            "enabled": bool(config.get("candidate_extraction_enabled", False)),
+            "auto_apply": bool(config.get("candidate_auto_apply", False)),
+            "max_per_turn": max(1, min(10, as_int("candidate_max_per_turn", 3))),
+        }
+
+    @staticmethod
+    def _candidate_text_from_query_vars(query_vars: dict, fallback: str = "") -> str:
+        text = str(query_vars.get("user_message_text", "") or "").strip()
+        return text or str(fallback or "").strip()
+
+    @staticmethod
+    def _redact_sensitive_candidate_text(text: str) -> str:
+        replacements = (
+            (r"(?i)(password\s*[:=]\s*)\S+", r"\1[REDACTED]"),
+            (r"(?i)(api\s*key\s*[:=]\s*)\S+", r"\1[REDACTED]"),
+            (r"(?i)(token\s*[:=]\s*)\S+", r"\1[REDACTED]"),
+            (r"(?i)(secret\s*[:=]\s*)\S+", r"\1[REDACTED]"),
+            (r"(验证码\s*[:：]?\s*)\S+", r"\1[REDACTED]"),
+            (r"(密码\s*[:：]?\s*)\S+", r"\1[REDACTED]"),
+            (r"(密钥\s*[:：]?\s*)\S+", r"\1[REDACTED]"),
+            (r"(令牌\s*[:：]?\s*)\S+", r"\1[REDACTED]"),
+        )
+        redacted = text
+        for pattern, replacement in replacements:
+            redacted = re.sub(pattern, replacement, redacted)
+        if redacted == text:
+            return "[REDACTED sensitive content]"
+        return redacted
+
+    @staticmethod
+    def _infer_candidates_from_text(
+        text: str,
+        *,
+        sender_id: str = "",
+        sender_name: str = "",
+        max_candidates: int = 3,
+    ) -> list[dict]:
+        normalized = " ".join(text.split())
+        if not normalized:
+            return []
+
+        speaker = sender_name or sender_id or "Current speaker"
+        lowered = normalized.lower()
+        candidates: list[dict] = []
+
+        stable_markers = (
+            "prefer",
+            "prefers",
+            "喜欢",
+            "偏好",
+            "叫我",
+            "call me",
+            "my name is",
+        )
+        temporal_markers = (
+            "tomorrow",
+            "next ",
+            "deadline",
+            "meeting",
+            "plan",
+            "travel",
+            "flight",
+            "今天",
+            "明天",
+            "下周",
+            "计划",
+            "截止",
+            "会议",
+            "航班",
+        )
+        sensitive_markers = (
+            "password",
+            "api key",
+            "token",
+            "secret",
+            "验证码",
+            "密码",
+            "密钥",
+            "令牌",
+        )
+
+        if any(marker in lowered for marker in sensitive_markers):
+            candidates.append({
+                "candidate_type": "ignore",
+                "payload": {
+                    "content": MemoryInjector._redact_sensitive_candidate_text(normalized),
+                    "redacted": True,
+                },
+                "reason": "Potential secret or credential; do not store automatically.",
+            })
+        elif any(marker in lowered for marker in stable_markers):
+            candidates.append({
+                "candidate_type": "l1_profile",
+                "payload": {
+                    "target_scope": "speaker" if sender_id else "session",
+                    "field": "preferences",
+                    "action": "add",
+                    "value": f"{speaker}: {normalized}",
+                },
+                "reason": "Stable preference or identity-like statement.",
+            })
+        elif any(marker in lowered for marker in temporal_markers):
+            candidates.append({
+                "candidate_type": "l2_episode",
+                "payload": {
+                    "content": f"{speaker}: {normalized}",
+                    "tags": ["candidate"],
+                    "importance": 2,
+                },
+                "reason": "Temporal plan, event, or situational fact.",
+            })
+        elif re.search(r"\b(i|we)\s+(decided|agreed|will|am|are)\b", lowered):
+            candidates.append({
+                "candidate_type": "l2_episode",
+                "payload": {
+                    "content": f"{speaker}: {normalized}",
+                    "tags": ["candidate"],
+                    "importance": 2,
+                },
+                "reason": "Potentially useful decision or status update.",
+            })
+
+        return candidates[:max_candidates]
+
+    async def _extract_memory_candidates(self, event_ctx: context.EventContext) -> None:
+        store = self.plugin.memory_store
+        event = event_ctx.event
+        api = QueryBasedAPIProxy(
+            query_id=event_ctx.query_id,
+            plugin_runtime_handler=self.plugin.plugin_runtime_handler,
+        )
+
+        kb = await store.get_kb_config()
+        if not kb:
+            return
+        kb_id, config = kb
+        candidate_config = self._candidate_config(config)
+        if not candidate_config["enabled"]:
+            return
+
+        bot_uuid = await api.get_bot_uuid()
+        query_vars = await api.get_query_vars()
+        session = getattr(event, "session", None)
+        if session is None:
+            return
+        session_key, user_key, _kb_id, _isolation, _config = await store.resolve_user_context(
+            session,
+            bot_uuid,
+        )
+        sender_id = str(getattr(event, "sender_id", "") or query_vars.get("sender_id", "") or "")
+        sender_name = str(query_vars.get("sender_name", "") or "")
+        text = self._candidate_text_from_query_vars(
+            query_vars,
+            getattr(event, "response_text", ""),
+        )
+        candidates = self._infer_candidates_from_text(
+            text,
+            sender_id=sender_id,
+            sender_name=sender_name,
+            max_candidates=candidate_config["max_per_turn"],
+        )
+        if not candidates:
+            return
+
+        embedding_model_uuid = str(config.get("embedding_model_uuid", "") or "")
+        for candidate in candidates:
+            entry = await store.append_memory_candidate(
+                scope_key=session_key,
+                user_key=user_key,
+                candidate_type=candidate["candidate_type"],
+                payload=candidate["payload"],
+                reason=candidate["reason"],
+                sender_id=sender_id,
+                sender_name=sender_name,
+                query_id=event_ctx.query_id,
+            )
+            if not candidate_config["auto_apply"]:
+                continue
+            if not embedding_model_uuid:
+                continue
+            accepted = await store.accept_memory_candidate(
+                session_key,
+                entry["candidate_id"],
+                collection_id=kb_id,
+                embedding_model_uuid=embedding_model_uuid,
+                user_key=user_key,
+                bot_uuid=bot_uuid,
+            )
+            if accepted:
+                await store.append_audit_entry(
+                    scope_key=session_key,
+                    user_key=user_key,
+                    operation="candidate_auto_apply",
+                    target_type="candidate",
+                    target_id=entry["candidate_id"],
+                    summary=f"Auto-applied memory candidate {entry['candidate_id']}",
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    query_id=event_ctx.query_id,
+                    metadata={"candidate": accepted},
+                )

@@ -26,6 +26,10 @@ class FakeStore:
     EPISODE_STATUS_ARCHIVED = "archived"
     EPISODE_STATUS_DELETED = "deleted"
     EPISODE_STATUSES = {"active", "superseded", "archived", "deleted"}
+    CANDIDATE_STATUS_PENDING = "pending"
+    CANDIDATE_STATUS_ACCEPTED = "accepted"
+    CANDIDATE_STATUS_REJECTED = "rejected"
+    CANDIDATE_STATUSES = {"pending", "accepted", "rejected"}
 
     def __init__(self):
         self.audit_entries: list[dict] = []
@@ -35,6 +39,8 @@ class FakeStore:
         self.delete_calls: list[dict] = []
         self.preview_calls: list[dict] = []
         self.apply_calls: list[dict] = []
+        self.accepted_candidates: list[str] = []
+        self.rejected_candidates: list[str] = []
         self.consolidation_enabled = False
 
     async def resolve_user_context(self, session, bot_uuid: str = ""):
@@ -213,6 +219,67 @@ class FakeStore:
             "summary_episode": {"id": "summary-1", "content": "summary"},
             "profile_updates_applied": [],
         }
+
+    async def list_memory_candidates(
+        self,
+        scope_key,
+        limit=10,
+        offset=0,
+        include_statuses=None,
+    ):
+        entries = [
+            {
+                "candidate_id": "cand-1",
+                "status": "pending",
+                "candidate_type": "l2_episode",
+                "payload": {"content": "Alice has a meeting tomorrow"},
+                "reason": "Temporal fact",
+            },
+            {
+                "candidate_id": "cand-2",
+                "status": "rejected",
+                "candidate_type": "ignore",
+                "payload": {"content": "secret"},
+                "reason": "Sensitive",
+            },
+        ]
+        statuses = set(include_statuses or ["pending"])
+        filtered = [entry for entry in entries if entry["status"] in statuses]
+        return filtered[offset: offset + limit], len(filtered)
+
+    async def get_memory_candidate(self, scope_key, candidate_id):
+        entries, _total = await self.list_memory_candidates(
+            scope_key,
+            include_statuses=self.CANDIDATE_STATUSES,
+        )
+        for entry in entries:
+            if entry["candidate_id"] == candidate_id:
+                return entry
+        return None
+
+    async def accept_memory_candidate(
+        self,
+        scope_key,
+        candidate_id,
+        collection_id,
+        embedding_model_uuid,
+        user_key,
+        bot_uuid="",
+    ):
+        if candidate_id == "missing":
+            return None
+        self.accepted_candidates.append(candidate_id)
+        return {
+            "candidate_id": candidate_id,
+            "status": "accepted",
+            "accepted_result": {"type": "episode", "episode": {"id": "ep-new"}},
+        }
+
+    async def reject_memory_candidate(self, scope_key, candidate_id):
+        if candidate_id == "missing":
+            return None
+        self.rejected_candidates.append(candidate_id)
+        return {"candidate_id": candidate_id, "status": "rejected"}
 
     async def append_audit_entry(self, **entry):
         self.audit_entries.append(entry)
@@ -414,3 +481,91 @@ async def test_memory_consolidate_run_writes_audit(monkeypatch):
         "consolidate_summary",
         "consolidate_run",
     ]
+
+
+@pytest.mark.asyncio
+async def test_memory_candidates_lists_pending_by_default(monkeypatch):
+    monkeypatch.setattr("components.commands.memory.QueryBasedAPIProxy", lambda **_: FakeAPI())
+    command = Memory()
+    plugin = FakePlugin()
+    command.plugin = plugin
+
+    output = await _run(command, "candidates", [])
+
+    assert "cand-1" in output
+    assert "Alice has a meeting tomorrow" in output
+    assert "cand-2" not in output
+
+
+@pytest.mark.asyncio
+async def test_memory_candidate_accept_writes_audit(monkeypatch):
+    monkeypatch.setattr("components.commands.memory.QueryBasedAPIProxy", lambda **_: FakeAPI())
+    command = Memory()
+    plugin = FakePlugin()
+    command.plugin = plugin
+
+    output = await _run(command, "candidate", ["accept", "cand-1"])
+
+    assert "accepted" in output
+    assert plugin.memory_store.accepted_candidates == ["cand-1"]
+    assert plugin.memory_store.audit_entries[-1]["operation"] == "candidate_accept"
+
+
+@pytest.mark.asyncio
+async def test_memory_candidate_accept_l1_does_not_require_active_kb(monkeypatch):
+    class InactiveAPI(FakeAPI):
+        async def list_pipeline_knowledge_bases(self) -> list[dict]:
+            return []
+
+    class L1Store(FakeStore):
+        async def get_memory_candidate(self, scope_key, candidate_id):
+            if candidate_id != "cand-l1":
+                return None
+            return {
+                "candidate_id": "cand-l1",
+                "status": "pending",
+                "candidate_type": "l1_profile",
+                "payload": {"field": "preferences", "value": "Alice prefers concise answers"},
+            }
+
+        async def accept_memory_candidate(
+            self,
+            scope_key,
+            candidate_id,
+            collection_id,
+            embedding_model_uuid,
+            user_key,
+            bot_uuid="",
+        ):
+            self.accepted_candidates.append(candidate_id)
+            return {
+                "candidate_id": candidate_id,
+                "status": "accepted",
+                "accepted_result": {"type": "profile", "profile": {"preferences": ["concise"]}},
+            }
+
+    monkeypatch.setattr("components.commands.memory.QueryBasedAPIProxy", lambda **_: InactiveAPI())
+    command = Memory()
+    plugin = FakePlugin()
+    plugin.memory_store = L1Store()
+    command.plugin = plugin
+
+    output = await _run(command, "candidate", ["accept", "cand-l1"])
+
+    assert "accepted" in output
+    assert plugin.memory_store.accepted_candidates == ["cand-l1"]
+    assert plugin.memory_store.audit_entries[-1]["operation"] == "candidate_accept"
+
+
+@pytest.mark.asyncio
+async def test_memory_candidate_reject_writes_audit(monkeypatch):
+    monkeypatch.setattr("components.commands.memory.QueryBasedAPIProxy", lambda **_: FakeAPI())
+    command = Memory()
+    plugin = FakePlugin()
+    command.plugin = plugin
+
+    output = await _run(command, "candidate", ["reject", "cand-1"])
+
+    assert "rejected" in output
+    assert plugin.memory_store.rejected_candidates == ["cand-1"]
+    assert plugin.memory_store.audit_entries[-1]["operation"] == "candidate_reject"

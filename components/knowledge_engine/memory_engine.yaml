@@ -153,6 +153,39 @@ spec:
       required: false
       default: false
 
+    - name: candidate_extraction_enabled
+      label:
+        en_US: Enable Memory Candidate Extraction
+        zh_Hans: 启用记忆候选提取
+      description:
+        en_US: Extract reviewable memory candidates after normal responses. Disabled by default to avoid memory pollution.
+        zh_Hans: 在普通回复后提取可审核的记忆候选。默认关闭以避免污染记忆。
+      type: boolean
+      required: false
+      default: false
+
+    - name: candidate_auto_apply
+      label:
+        en_US: Auto Apply Memory Candidates
+        zh_Hans: 自动应用记忆候选
+      description:
+        en_US: Automatically accept extracted candidates. Keep disabled unless you accept the risk of memory pollution.
+        zh_Hans: 自动接受提取出的候选。除非能接受记忆污染风险，否则保持关闭。
+      type: boolean
+      required: false
+      default: false
+
+    - name: candidate_max_per_turn
+      label:
+        en_US: Max Candidates Per Turn
+        zh_Hans: 单轮候选上限
+      description:
+        en_US: Maximum number of memory candidates created from one response turn.
+        zh_Hans: 单次回复最多创建的记忆候选数量。
+      type: integer
+      required: false
+      default: 3
+
   retrieval_schema:
     - name: top_k
       label:

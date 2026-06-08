@@ -42,6 +42,15 @@ class MemoryStore:
     _MAX_SLOT_HISTORY = 8
     _RECENT_SLOT_CHANGE_DAYS = 30
     _MAX_AUDIT_ENTRIES_PER_SCOPE = 1000
+    _MAX_CANDIDATES_PER_SCOPE = 1000
+    CANDIDATE_STATUS_PENDING = "pending"
+    CANDIDATE_STATUS_ACCEPTED = "accepted"
+    CANDIDATE_STATUS_REJECTED = "rejected"
+    CANDIDATE_STATUSES = {
+        CANDIDATE_STATUS_PENDING,
+        CANDIDATE_STATUS_ACCEPTED,
+        CANDIDATE_STATUS_REJECTED,
+    }
     EPISODE_STATUS_ACTIVE = "active"
     EPISODE_STATUS_SUPERSEDED = "superseded"
     EPISODE_STATUS_ARCHIVED = "archived"
@@ -658,6 +667,10 @@ class MemoryStore:
     def _audit_key(scope_key: str) -> str:
         return f"audit:{scope_key}"
 
+    @staticmethod
+    def _candidate_key(scope_key: str) -> str:
+        return f"candidates:{scope_key}"
+
     async def _read_json(self, key: str) -> Any:
         try:
             data = await self.plugin.get_plugin_storage(key)
@@ -731,6 +744,193 @@ class MemoryStore:
         if not isinstance(entries, list):
             return []
         return list(entries)
+
+    async def append_memory_candidate(
+        self,
+        scope_key: str,
+        user_key: str,
+        candidate_type: str,
+        payload: dict[str, Any],
+        reason: str,
+        *,
+        sender_id: str = "",
+        sender_name: str = "",
+        query_id: int | None = None,
+    ) -> dict[str, Any]:
+        candidate_type = str(candidate_type or "").strip().lower()
+        if candidate_type not in {"l1_profile", "l2_episode", "ignore"}:
+            raise ValueError("candidate_type must be l1_profile, l2_episode, or ignore")
+        entry = {
+            "candidate_id": uuid.uuid4().hex[:12],
+            "scope_key": scope_key,
+            "user_key": user_key,
+            "candidate_type": candidate_type,
+            "status": self.CANDIDATE_STATUS_PENDING,
+            "payload": copy.deepcopy(payload),
+            "reason": self._preview_text(reason, 240),
+            "sender_id": sender_id,
+            "sender_name": sender_name,
+            "query_id": query_id,
+            "created_at": self._now_timestamp(),
+            "updated_at": self._now_timestamp(),
+        }
+        key = self._candidate_key(scope_key)
+        entries = await self._read_json(key)
+        if not isinstance(entries, list):
+            entries = []
+        entries.append(entry)
+        entries = entries[-self._MAX_CANDIDATES_PER_SCOPE:]
+        await self._write_json(key, entries)
+        return entry
+
+    async def list_memory_candidates(
+        self,
+        scope_key: str,
+        *,
+        limit: int = 10,
+        offset: int = 0,
+        include_statuses: list[str] | set[str] | tuple[str, ...] | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        statuses = {
+            str(status or "").strip().lower()
+            for status in (include_statuses or [self.CANDIDATE_STATUS_PENDING])
+        }
+        statuses = statuses & self.CANDIDATE_STATUSES
+        if not statuses:
+            statuses = {self.CANDIDATE_STATUS_PENDING}
+        entries = await self._read_json(self._candidate_key(scope_key))
+        if not isinstance(entries, list):
+            entries = []
+        filtered = [entry for entry in reversed(entries) if entry.get("status") in statuses]
+        return filtered[offset: offset + limit], len(filtered)
+
+    async def get_memory_candidate(
+        self,
+        scope_key: str,
+        candidate_id: str,
+    ) -> dict[str, Any] | None:
+        entries = await self._read_json(self._candidate_key(scope_key))
+        if not isinstance(entries, list):
+            return None
+        for entry in entries:
+            if entry.get("candidate_id") == candidate_id:
+                return copy.deepcopy(entry)
+        return None
+
+    async def _update_memory_candidate(
+        self,
+        scope_key: str,
+        candidate_id: str,
+        status: str,
+    ) -> dict[str, Any] | None:
+        status = str(status or "").strip().lower()
+        if status not in self.CANDIDATE_STATUSES:
+            raise ValueError("candidate status must be pending, accepted, or rejected")
+        key = self._candidate_key(scope_key)
+        entries = await self._read_json(key)
+        if not isinstance(entries, list):
+            return None
+        updated: dict[str, Any] | None = None
+        for entry in entries:
+            if entry.get("candidate_id") != candidate_id:
+                continue
+            entry["status"] = status
+            entry["updated_at"] = self._now_timestamp()
+            updated = entry
+            break
+        if updated is None:
+            return None
+        await self._write_json(key, entries)
+        return updated
+
+    async def reject_memory_candidate(
+        self,
+        scope_key: str,
+        candidate_id: str,
+    ) -> dict[str, Any] | None:
+        return await self._update_memory_candidate(
+            scope_key,
+            candidate_id,
+            self.CANDIDATE_STATUS_REJECTED,
+        )
+
+    async def accept_memory_candidate(
+        self,
+        scope_key: str,
+        candidate_id: str,
+        *,
+        collection_id: str,
+        embedding_model_uuid: str,
+        user_key: str,
+        bot_uuid: str = "",
+    ) -> dict[str, Any] | None:
+        key = self._candidate_key(scope_key)
+        entries = await self._read_json(key)
+        if not isinstance(entries, list):
+            return None
+
+        candidate = None
+        for entry in entries:
+            if entry.get("candidate_id") == candidate_id:
+                candidate = entry
+                break
+        if not candidate:
+            return None
+        if candidate.get("status") != self.CANDIDATE_STATUS_PENDING:
+            raise ValueError("candidate is not pending")
+
+        payload = candidate.get("payload", {})
+        result: dict[str, Any]
+        candidate_type = candidate.get("candidate_type")
+        if candidate_type == "l2_episode":
+            episode = await self.add_episode(
+                collection_id=collection_id,
+                embedding_model_uuid=embedding_model_uuid,
+                user_key=user_key,
+                content=str(payload.get("content", "") or ""),
+                tags=self._normalize_text_list(payload.get("tags", [])),
+                importance=int(payload.get("importance", 2) or 2),
+                source="candidate",
+                sender_id=str(candidate.get("sender_id", "") or ""),
+                sender_name=str(candidate.get("sender_name", "") or ""),
+                bot_uuid=bot_uuid,
+            )
+            result = {"type": "episode", "episode": episode}
+        elif candidate_type == "l1_profile":
+            target_scope = str(payload.get("target_scope", "speaker") or "speaker")
+            field = str(payload.get("field", "notes") or "notes")
+            action = str(payload.get("action", "add") or "add")
+            value = str(payload.get("value", "") or "")
+            fact_key = str(payload.get("fact_key", "") or "")
+            previous_value = str(payload.get("previous_value", "") or "")
+            if target_scope == "session":
+                profile = await self.update_session_profile_field(
+                    scope_key,
+                    field,
+                    action,
+                    value,
+                    fact_key,
+                    previous_value,
+                )
+            else:
+                profile = await self.update_speaker_profile_field(
+                    scope_key,
+                    str(candidate.get("sender_id", "") or ""),
+                    field,
+                    action,
+                    value,
+                    fact_key,
+                    previous_value,
+                )
+            result = {"type": "profile", "profile": profile}
+        else:
+            result = {"type": "ignore"}
+
+        candidate["status"] = self.CANDIDATE_STATUS_ACCEPTED
+        candidate["updated_at"] = self._now_timestamp()
+        candidate["accepted_result"] = result
+        await self._write_json(key, entries)
+        return candidate
 
     def _get_cached_profile(self, storage_key: str) -> dict[str, Any] | None:
         now = time.monotonic()
