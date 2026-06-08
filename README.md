@@ -288,6 +288,10 @@ Use `!memory audit [page]` to inspect recent entries for the current scope, or `
 
 Use `!memory show <episode_id>` to inspect one episode, including status, sender, source, tags, importance, and supersede metadata. Use `!memory superseded [page]` and `!memory archived [page]` to inspect records hidden from normal recall. Use `!memory archive <episode_id>` to hide an active episode without deleting it, and `!memory restore <episode_id>` to make an archived or superseded episode active again. Archive and restore operations write audit entries.
 
+## Retrieval Strategy
+
+The memory KB supports `retrieval_strategy` values `auto`, `vector`, and `hybrid`. `auto` tries hybrid search with `query_text` and falls back to vector search if the backend does not support hybrid mode. `vector` is the compatibility mode. `exact_match_boost` boosts exact matches on episode IDs, sender identity, tags, and content snippets; searching by an exact episode ID can return that episode without relying on embedding similarity.
+
 ## Context Sharing for Other Plugins
 
 LongTermMemory writes a structured context summary to the query variable `_ltm_context` during every `PromptPreProcessing` event. Other plugins can read this variable to make programmatic decisions based on user memory, without importing or referencing LongTermMemory in any way.

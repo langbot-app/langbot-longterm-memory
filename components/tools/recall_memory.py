@@ -133,6 +133,9 @@ class RecallMemory(Tool):
                 importance_min=importance_min,
                 source=source.strip(),
                 include_statuses=[status],
+                retrieval_strategy=config.get("retrieval_strategy", "auto"),
+                vector_weight=config.get("vector_weight", 0.7),
+                exact_match_boost=bool(config.get("exact_match_boost", True)),
             )
         except ValueError as exc:
             return f"Error: {exc}"

@@ -196,23 +196,51 @@ class LongTermMemoryEngine(KnowledgeEngine):
         # Over-fetch to allow time-decay re-ranking to surface recent
         # memories that would otherwise be pushed out by pure similarity.
         fetch_k = top_k * 3
+        retrieval_strategy = store.normalize_retrieval_strategy(
+            settings.get("retrieval_strategy", "auto")
+        )
+        vector_weight = store.normalize_vector_weight(settings.get("vector_weight", 0.7))
+        exact_match_boost = bool(settings.get("exact_match_boost", True))
         results: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
 
         async def extend_results(filters: dict[str, Any] | None) -> None:
             nonlocal results
             logger.info(
-                "[LongTermMemory] engine vector search: collection_id=%s fetch_k=%s filters=%s",
+                "[LongTermMemory] engine vector search: collection_id=%s fetch_k=%s strategy=%s filters=%s",
                 collection_id,
                 fetch_k,
+                retrieval_strategy,
                 filters,
             )
-            batch = await self.plugin.vector_search(
-                collection_id=collection_id,
-                query_vector=query_vector,
-                top_k=fetch_k,
-                filters=filters,
-            )
+            search_kwargs = {
+                "collection_id": collection_id,
+                "query_vector": query_vector,
+                "top_k": fetch_k,
+                "filters": filters,
+            }
+            if retrieval_strategy in {"auto", "hybrid"}:
+                try:
+                    batch = await self.plugin.vector_search(
+                        **search_kwargs,
+                        search_type="hybrid",
+                        query_text=query,
+                        vector_weight=vector_weight,
+                    )
+                except Exception:
+                    if retrieval_strategy == "hybrid":
+                        logger.warning(
+                            "[LongTermMemory] engine hybrid search failed; falling back to vector search",
+                            exc_info=True,
+                        )
+                    else:
+                        logger.info(
+                            "[LongTermMemory] engine auto hybrid search unavailable; falling back to vector search",
+                            exc_info=True,
+                        )
+                    batch = await self.plugin.vector_search(**search_kwargs)
+            else:
+                batch = await self.plugin.vector_search(**search_kwargs)
             for item in batch:
                 item_id = item.get("id", "")
                 if item_id and item_id in seen_ids:
@@ -257,12 +285,27 @@ class LongTermMemoryEngine(KnowledgeEngine):
             importance_weight = self._importance_weight(importance)
             speaker_weight = self._speaker_match_weight(metadata, sender_id)
             update_weight = 1.08 if self._has_update_signal(metadata) else 1.0
-            final_score = time_score * importance_weight * speaker_weight * update_weight
+            exact_boost = 1.0
+            if exact_match_boost:
+                exact_score = store._metadata_exact_match_score(
+                    query,
+                    r.get("id", ""),
+                    metadata,
+                )
+                exact_boost += min(exact_score, 2.0) * 0.25
+            final_score = (
+                time_score
+                * importance_weight
+                * speaker_weight
+                * update_weight
+                * exact_boost
+            )
             r["_final_score"] = max(0.0, min(1.0, final_score))
             r["_recency_hint"] = self._recency_hint(ts)
             r["_importance"] = importance
             r["_speaker_match"] = speaker_weight > 1.0
             r["_has_update_signal"] = update_weight > 1.0
+            r["_exact_match"] = exact_boost > 1.0
 
         results.sort(key=lambda r: r["_final_score"], reverse=True)
         results = results[:top_k]
@@ -288,6 +331,8 @@ class LongTermMemoryEngine(KnowledgeEngine):
                 hints.append("speaker:current")
             if r.get("_has_update_signal"):
                 hints.append("signal:update")
+            if r.get("_exact_match"):
+                hints.append("match:exact")
 
             display = f"[{timestamp}] ({', '.join(hints)})"
             if tags:
