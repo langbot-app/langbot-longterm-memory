@@ -31,11 +31,14 @@ spec:
 
   llm_prompt: |
     Store an episodic memory — events, plans, experiences, or situational facts.
+    Episodic memory is L2: use it for history and future recall, not for the current stable profile.
+
     Call this tool when the user mentions something that may be relevant later, such as:
     - Events and experiences ("I just got back from Tokyo", "had a fight with my boss")
     - Plans and schedules ("I'm traveling to Paris next month", "deadline is Friday")
     - Project context ("working on a migration from MySQL to PostgreSQL")
     - Situational facts ("my cat is sick", "just moved to a new apartment")
+    - Group decisions ("The project group agreed to release on Friday")
 
     IMPORTANT: Always include the speaker's name or identifier in the content.
     For example, write "Alice is traveling to Paris next month" instead of "traveling to Paris next month".
@@ -44,6 +47,13 @@ spec:
     Do NOT use this for stable identity information — use "update_profile" instead:
     - Name, job title, personality traits → update_profile
     - Communication preferences → update_profile
+
+    Do NOT store:
+    - one-off greetings, jokes, or small talk
+    - secrets, credentials, API keys, one-time codes, or private tokens
+    - unconfirmed sensitive information or third-party private gossip
+    - harmful inferred labels about a person
+    - facts that are only useful for the current immediate answer
 
     If the user explicitly corrects, retracts, or revises an earlier statement:
     - store the correction as an episodic memory with clear wording
@@ -55,6 +65,11 @@ spec:
 
     Example correction memory:
     - "Alice corrected a previous preference statement and said she actually does not like coffee."
+
+    Examples:
+    - Private chat L2: "Alice said her flight to Tokyo is next Tuesday."
+    - Group chat L2: "In the design group, Bob decided to own the database migration this week."
+    - Not L2: "Alice prefers concise answers." Use update_profile instead.
 
     Parameters:
     - content (required): What to remember. Be concise and factual. Always attribute to the speaker.

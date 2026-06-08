@@ -216,6 +216,10 @@ class MemoryInjector(EventListener):
             "Treat the profile sections below as the current best-known stable state. "
             "If episodic memories conflict with profile facts, prefer the newer explicit correction "
             "and use the profile as the default current view.\n\n"
+            "Memory write policy: use L1 profile updates only for stable, low-frequency, currently valid facts. "
+            "Use L2 episodic memory for events, plans, decisions, and historically useful corrections. "
+            "Do not store one-off small talk, secrets, credentials, unconfirmed sensitive claims, "
+            "or facts only needed for the immediate answer.\n\n"
             + "\n\n".join(blocks)
         )
         logger.info(

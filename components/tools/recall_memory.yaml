@@ -67,6 +67,7 @@ spec:
     - status
 
     Important behavior:
+    - This is a read-only lookup tool. Do not call remember or update_profile just because recall returned no result.
     - These filters narrow results rather than broaden them.
     - By default, recall only returns active memories. Use status=superseded or status=archived only when the user asks to inspect older hidden records.
     - When multiple filters are provided together, they are typically combined as restrictive conditions.

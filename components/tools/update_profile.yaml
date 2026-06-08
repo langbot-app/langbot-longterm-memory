@@ -50,6 +50,7 @@ spec:
 
   llm_prompt: |
     Update the session profile — shared context about this conversation (group chat or private chat).
+    Profile memory is L1: use it for stable, low-frequency, currently valid facts.
     This tool can update either:
     - the shared session profile for the whole chat
     - the current speaker's profile for person-specific stable facts
@@ -84,11 +85,18 @@ spec:
     - When adding facts about a person in a group chat, prefer scope="speaker".
     - When adding shared group context, use scope="session".
     - When adding traits about specific people, include their name (e.g. "Alice likes coffee" not just "likes coffee").
+    - Do not write short-lived plans, deadlines, recent events, or one-off states into L1; use remember for those.
+    - Do not store secrets, credentials, one-time codes, unconfirmed sensitive claims, or harmful inferred labels.
     - For traits/preferences that may later be corrected, prefer providing fact_key so the plugin can keep one current value plus history.
     - When a user corrects, retracts, or negates a previously stored stable fact, do NOT keep contradictory current profile values in parallel.
     - Prefer replacing the old current value. In practice, use the same fact_key with action="set" for the corrected current fact. If the old value is known, also provide previous_value so it is preserved as history.
     - If the correction itself is historically important, also store it with the "remember" tool so the timeline is preserved.
-    For specific events or temporal facts, use the "remember" tool instead.
+
+    Examples:
+    - Private chat L1 speaker profile: "Alice prefers concise technical answers."
+    - Group chat L1 session profile: "This group coordinates the LangBot release."
+    - Correction: if Alice says "Actually I prefer English replies, not Chinese", set the same reply_language fact_key to the new current value and pass the old value as previous_value if known.
+    - Not L1: "Alice has a meeting tomorrow at 10." Use remember instead.
 
 execution:
   python:
