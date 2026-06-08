@@ -5,64 +5,93 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title data-i18n="title">Memory Console</title>
   <style>
-    :root { color-scheme: light dark; }
+    :root {
+      color-scheme: light dark;
+      --bg: var(--langbot-bg, #f6f7f9);
+      --surface: var(--langbot-bg-card, #ffffff);
+      --surface-soft: #f8fafc;
+      --text: var(--langbot-text, #111827);
+      --muted: var(--langbot-text-muted, #64748b);
+      --border: var(--langbot-border, #dbe2ea);
+      --accent: var(--langbot-accent, #2563eb);
+      --accent-soft: rgba(37, 99, 235, .09);
+      --ok: #047857;
+      --warn: #b45309;
+      --danger: #b91c1c;
+    }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: var(--langbot-bg, #ffffff);
-      color: var(--langbot-text, #0f172a);
+      background: var(--bg);
+      color: var(--text);
       font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       font-size: 14px;
+      line-height: 1.45;
     }
     button, input, select, textarea { font: inherit; }
     button {
       min-height: 34px;
-      border: 1px solid var(--langbot-border, #d8dee8);
+      border: 1px solid var(--border);
       border-radius: 6px;
-      background: var(--langbot-bg-card, #f8fafc);
-      color: var(--langbot-text, #0f172a);
+      background: var(--surface);
+      color: var(--text);
       padding: 0 12px;
       cursor: pointer;
+      white-space: nowrap;
     }
+    button:hover { border-color: var(--accent); }
     button.primary {
-      border-color: var(--langbot-accent, #2563eb);
-      background: var(--langbot-accent, #2563eb);
+      border-color: var(--accent);
+      background: var(--accent);
       color: #fff;
     }
-    button.danger { color: #b91c1c; border-color: #f1b5b5; }
+    button.danger {
+      color: var(--danger);
+      border-color: #efb4b4;
+      background: #fff7f7;
+    }
     button:disabled { cursor: not-allowed; opacity: .55; }
     input, select, textarea {
       width: 100%;
       min-height: 36px;
-      border: 1px solid var(--langbot-border, #d8dee8);
+      border: 1px solid var(--border);
       border-radius: 6px;
-      background: var(--langbot-bg-card, #f8fafc);
-      color: var(--langbot-text, #0f172a);
+      background: var(--surface);
+      color: var(--text);
       padding: 7px 9px;
       outline: none;
     }
-    textarea { min-height: 78px; resize: vertical; }
+    textarea {
+      min-height: 78px;
+      resize: vertical;
+    }
     label {
       display: block;
       margin-bottom: 5px;
-      color: var(--langbot-text-muted, #64748b);
+      color: var(--muted);
       font-size: 12px;
     }
-    h1, h2, h3 { letter-spacing: 0; }
-    h1 { margin: 0; font-size: 25px; line-height: 1.15; }
-    h2 { margin: 0 0 12px; font-size: 16px; }
-    h3 { margin: 0 0 8px; font-size: 14px; }
+    h1, h2, h3 {
+      margin: 0;
+      letter-spacing: 0;
+    }
+    h1 {
+      font-size: 24px;
+      line-height: 1.2;
+    }
+    h2 { font-size: 16px; }
+    h3 { font-size: 14px; }
     pre {
       margin: 0;
-      max-height: 360px;
+      max-height: 420px;
       overflow: auto;
       white-space: pre-wrap;
       word-break: break-word;
     }
     .shell {
-      width: min(1220px, calc(100vw - 32px));
+      width: min(1240px, calc(100vw - 32px));
       margin: 0 auto;
-      padding: 24px 0 36px;
+      padding: 22px 0 36px;
     }
     .topbar {
       display: flex;
@@ -71,123 +100,161 @@
       gap: 16px;
       margin-bottom: 16px;
     }
-    .muted { color: var(--langbot-text-muted, #64748b); }
-    .panel {
-      border: 1px solid var(--langbot-border, #e2e8f0);
-      border-radius: 8px;
-      background: var(--langbot-bg-card, #f8fafc);
-      padding: 14px;
+    .subtitle {
+      margin-top: 5px;
+      color: var(--muted);
     }
-    .summary {
+    .muted { color: var(--muted); }
+    .metrics {
       display: grid;
-      grid-template-columns: 1.3fr repeat(3, minmax(0, .8fr));
-      gap: 12px;
+      grid-template-columns: 1.15fr repeat(3, minmax(0, .75fr));
+      gap: 10px;
       margin-bottom: 14px;
     }
-    .status-line {
+    .metric, .surface {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+    .metric { padding: 13px; }
+    .metric-label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .metric-value {
+      margin-top: 6px;
+      font-size: 23px;
+      font-weight: 720;
+      line-height: 1;
+    }
+    .status-row, .actions, .tags, .item-actions {
       display: flex;
       align-items: center;
       gap: 8px;
       flex-wrap: wrap;
-      margin-top: 8px;
     }
+    .status-row { margin-top: 8px; }
     .pill {
       display: inline-flex;
       align-items: center;
-      min-height: 24px;
+      min-height: 23px;
+      border: 1px solid var(--border);
       border-radius: 999px;
-      padding: 2px 9px;
+      background: var(--surface-soft);
+      color: var(--muted);
+      padding: 2px 8px;
       font-size: 12px;
-      border: 1px solid var(--langbot-border, #d8dee8);
-      color: var(--langbot-text-muted, #64748b);
-      background: var(--langbot-bg, #fff);
     }
-    .pill.ok { color: #047857; border-color: #8fd9bd; background: rgba(16, 185, 129, .08); }
-    .pill.warn { color: #b45309; border-color: #f5c16c; background: rgba(245, 158, 11, .10); }
-    .metric-label { color: var(--langbot-text-muted, #64748b); }
-    .metric-value { margin-top: 7px; font-size: 24px; font-weight: 720; line-height: 1; }
+    .pill.ok {
+      color: var(--ok);
+      border-color: #a7dfc4;
+      background: #ecfdf5;
+    }
+    .pill.warn {
+      color: var(--warn);
+      border-color: #f1c27d;
+      background: #fff7ed;
+    }
+    .pill.danger {
+      color: var(--danger);
+      border-color: #efb4b4;
+      background: #fff7f7;
+    }
     .layout {
       display: grid;
       grid-template-columns: 330px minmax(0, 1fr);
       gap: 14px;
       align-items: start;
     }
-    .side-stack, .content-stack, .list { display: grid; gap: 12px; }
+    .side-stack, .content-stack, .list {
+      display: grid;
+      gap: 12px;
+    }
+    .surface { padding: 14px; }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
     .field { margin-bottom: 10px; }
-    .row {
+    .grid-2 {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 10px;
     }
-    .actions {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
+    .scope-card {
+      border-left: 3px solid var(--accent);
+      padding-left: 10px;
+      overflow-wrap: anywhere;
+    }
+    .scope-key {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
     }
     .tabs {
       display: flex;
       gap: 6px;
-      border-bottom: 1px solid var(--langbot-border, #e2e8f0);
-      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+      padding: 0 0 8px;
       margin-bottom: 14px;
+      overflow-x: auto;
     }
     .tab.active {
       color: #fff;
-      border-color: var(--langbot-accent, #2563eb);
-      background: var(--langbot-accent, #2563eb);
+      border-color: var(--accent);
+      background: var(--accent);
     }
-    .empty, .notice {
-      border: 1px solid var(--langbot-border, #e2e8f0);
+    .toolbar {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) 150px 110px;
+      gap: 10px;
+      align-items: end;
+      margin-bottom: 12px;
+    }
+    .toolbar.compact {
+      grid-template-columns: 170px 110px auto;
+    }
+    .notice, .empty, .item {
+      border: 1px solid var(--border);
       border-radius: 8px;
-      background: var(--langbot-bg, #fff);
+      background: var(--surface-soft);
       padding: 12px;
-      color: var(--langbot-text-muted, #64748b);
     }
+    .empty, .notice { color: var(--muted); }
     .error {
-      color: #b91c1c;
+      color: var(--danger);
       border-color: #fecaca;
-      background: rgba(254, 226, 226, .35);
+      background: #fff7f7;
     }
     .item {
-      border: 1px solid var(--langbot-border, #e2e8f0);
-      border-radius: 8px;
-      background: var(--langbot-bg, #fff);
-      padding: 12px;
+      display: grid;
+      gap: 8px;
+      background: var(--surface);
     }
     .item-head {
       display: flex;
       justify-content: space-between;
       gap: 12px;
-      margin-bottom: 8px;
+      align-items: flex-start;
     }
     .item-title {
       min-width: 0;
       overflow-wrap: anywhere;
       font-weight: 650;
     }
-    .tags {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-      margin-top: 9px;
-    }
-    .debug {
+    .item-content { overflow-wrap: anywhere; }
+    .raw {
       display: none;
       margin-top: 12px;
     }
-    .debug.open { display: block; }
-    .scope-card {
-      display: grid;
-      gap: 8px;
-    }
-    .scope-current {
-      border-left: 3px solid var(--langbot-accent, #2563eb);
-      padding-left: 10px;
-      overflow-wrap: anywhere;
-    }
+    .raw.open { display: block; }
     @media (max-width: 980px) {
-      .summary, .layout, .row { grid-template-columns: 1fr; }
+      .metrics, .layout, .grid-2, .toolbar, .toolbar.compact {
+        grid-template-columns: 1fr;
+      }
       .topbar { flex-direction: column; }
     }
   </style>
@@ -197,30 +264,30 @@
     <header class="topbar">
       <div>
         <h1 data-i18n="title">Memory Console</h1>
-        <div id="subtitle" class="muted"></div>
+        <div class="subtitle" data-i18n="consoleSubtitle">Manage profiles, episodic memories, and maintenance records.</div>
       </div>
       <div class="actions">
         <button id="refreshBtn" class="primary" data-i18n="refresh">Refresh</button>
       </div>
     </header>
 
-    <section class="summary">
-      <div class="panel">
+    <section class="metrics">
+      <div class="metric">
         <div class="metric-label" data-i18n="systemStatus">System Status</div>
-        <div class="status-line">
+        <div class="status-row">
           <span id="kbStatus" class="pill warn">-</span>
           <span id="scopeStatus" class="pill warn">-</span>
         </div>
       </div>
-      <div class="panel">
-        <div class="metric-label" data-i18n="memoryKb">Memory KB</div>
-        <div id="kbCount" class="metric-value">-</div>
+      <div class="metric">
+        <div class="metric-label" data-i18n="memorySpaces">Memory Spaces</div>
+        <div id="scopeCount" class="metric-value">-</div>
       </div>
-      <div class="panel">
+      <div class="metric">
         <div class="metric-label" data-i18n="profiles">Profiles</div>
         <div id="profileCount" class="metric-value">-</div>
       </div>
-      <div class="panel">
+      <div class="metric">
         <div class="metric-label" data-i18n="speakers">Speakers</div>
         <div id="speakerProfileCount" class="metric-value">-</div>
       </div>
@@ -228,35 +295,54 @@
 
     <section class="layout">
       <aside class="side-stack">
-        <div class="panel scope-card">
-          <h2 data-i18n="currentScope">Current Scope</h2>
+        <div class="surface">
+          <div class="section-head">
+            <h2 data-i18n="memorySpace">Memory Space</h2>
+          </div>
           <div class="field">
-            <label for="scopeSelect" data-i18n="knownScope">Known scope</label>
+            <label for="scopeSelect" data-i18n="knownScope">Known space</label>
             <select id="scopeSelect"></select>
           </div>
           <div class="field">
             <label for="speakerSelect" data-i18n="speaker">Speaker</label>
             <select id="speakerSelect"></select>
           </div>
-          <div class="scope-current">
-            <div class="muted">scope_key</div>
+          <div class="scope-card">
+            <span class="scope-key">scope_key</span>
             <div id="scopePreview">-</div>
-            <div class="muted" style="margin-top: 8px;">user_key</div>
+            <span class="scope-key" style="margin-top: 8px;">user_key</span>
             <div id="userPreview">-</div>
           </div>
-          <div class="actions">
+          <div class="actions" style="margin-top: 12px;">
             <button id="loadProfileBtn" class="primary" data-i18n="loadProfiles">Load Profiles</button>
-            <button id="toggleDebugBtn" data-i18n="advanced">Advanced</button>
           </div>
-          <div id="debugPanel" class="debug">
-            <div class="field">
-              <label for="botUuid">bot_uuid</label>
-              <input id="botUuid" autocomplete="off">
-            </div>
-            <div class="field">
-              <label for="sessionName">session_name</label>
-              <input id="sessionName" autocomplete="off" placeholder="group_123">
-            </div>
+        </div>
+
+        <div class="surface">
+          <div class="section-head">
+            <h2 data-i18n="knowledgeBase">Knowledge Base</h2>
+          </div>
+          <div class="field">
+            <label for="kbSelect" data-i18n="memoryKb">Memory KB</label>
+            <select id="kbSelect"></select>
+          </div>
+          <div id="kbDetail" class="muted">-</div>
+        </div>
+
+        <div class="surface">
+          <div class="section-head">
+            <h2 data-i18n="advancedLocation">Advanced</h2>
+            <button id="toggleRawBtn" data-i18n="toggleRaw">Raw</button>
+          </div>
+          <div class="field">
+            <label for="botUuid">bot_uuid</label>
+            <input id="botUuid" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="sessionName">session_name</label>
+            <input id="sessionName" autocomplete="off" placeholder="group_123">
+          </div>
+          <div class="grid-2">
             <div class="field">
               <label for="isolation">isolation</label>
               <select id="isolation">
@@ -264,10 +350,13 @@
                 <option value="bot">bot</option>
               </select>
             </div>
-            <div class="actions">
+            <div class="field">
+              <label>&nbsp;</label>
               <button id="deriveBtn" data-i18n="derive">Derive</button>
             </div>
-            <div class="field" style="margin-top: 10px;">
+          </div>
+          <div class="raw" id="rawFields">
+            <div class="field">
               <label for="scopeKey">scope_key</label>
               <input id="scopeKey" autocomplete="off">
             </div>
@@ -279,13 +368,6 @@
               <label for="senderId">sender_id</label>
               <input id="senderId" autocomplete="off">
             </div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <h2 data-i18n="knowledgeBase">Knowledge Base</h2>
-          <div id="kbList" class="list"></div>
-          <div id="kbDebug" class="debug">
             <div class="field">
               <label for="collectionId">collection_id</label>
               <input id="collectionId" autocomplete="off">
@@ -298,11 +380,12 @@
         </div>
       </aside>
 
-      <main class="panel">
+      <main class="surface">
         <div class="tabs">
           <button class="tab active" data-tab="profiles" data-i18n="profiles">Profiles</button>
           <button class="tab" data-tab="episodes" data-i18n="episodes">Episodes</button>
-          <button class="tab" data-tab="export" data-i18n="export">Export</button>
+          <button class="tab" data-tab="audit" data-i18n="audit">Audit</button>
+          <button class="tab" data-tab="exports" data-i18n="exports">Export</button>
           <button class="tab" data-tab="diagnostics" data-i18n="diagnostics">Diagnostics</button>
         </div>
 
@@ -311,32 +394,34 @@
         </section>
 
         <section id="episodesTab" class="tab-panel" style="display:none;">
-          <div class="row">
+          <div class="toolbar">
             <div class="field">
               <label for="episodeQuery" data-i18n="query">Query</label>
               <textarea id="episodeQuery"></textarea>
             </div>
-            <div>
-              <div class="row">
-                <div class="field">
-                  <label for="topK">top_k</label>
-                  <input id="topK" type="number" min="1" max="50" value="10">
-                </div>
-                <div class="field">
-                  <label for="pageNo" data-i18n="page">Page</label>
-                  <input id="pageNo" type="number" min="1" value="1">
-                </div>
-              </div>
-              <div class="row">
-                <div class="field">
-                  <label for="source">source</label>
-                  <input id="source" autocomplete="off">
-                </div>
-                <div class="field">
-                  <label for="importanceMin">importance_min</label>
-                  <input id="importanceMin" type="number" min="1" max="5">
-                </div>
-              </div>
+            <div class="field">
+              <label for="episodeStatus" data-i18n="status">Status</label>
+              <select id="episodeStatus">
+                <option value="active" data-i18n="statusActive">Active</option>
+                <option value="superseded" data-i18n="statusSuperseded">Superseded</option>
+                <option value="archived" data-i18n="statusArchived">Archived</option>
+                <option value="deleted" data-i18n="statusDeleted">Deleted</option>
+                <option value="all" data-i18n="statusAll">All</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="pageNo" data-i18n="page">Page</label>
+              <input id="pageNo" type="number" min="1" value="1">
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="field">
+              <label for="source">source</label>
+              <input id="source" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="importanceMin">importance_min</label>
+              <input id="importanceMin" type="number" min="1" max="5">
             </div>
           </div>
           <div class="actions" style="margin-bottom: 12px;">
@@ -346,9 +431,44 @@
           <div id="episodesOutput" class="list"></div>
         </section>
 
-        <section id="exportTab" class="tab-panel" style="display:none;">
-          <div class="actions" style="margin-bottom: 12px;">
-            <button id="exportProfilesBtn" class="primary" data-i18n="exportProfiles">Export Profiles</button>
+        <section id="auditTab" class="tab-panel" style="display:none;">
+          <div class="toolbar compact">
+            <div class="field">
+              <label for="auditPage" data-i18n="page">Page</label>
+              <input id="auditPage" type="number" min="1" value="1">
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button id="loadAuditBtn" class="primary" data-i18n="loadAudit">Load Audit</button>
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button id="exportAuditBtn" data-i18n="exportAudit">Export Audit</button>
+            </div>
+          </div>
+          <div id="auditOutput" class="list"></div>
+        </section>
+
+        <section id="exportsTab" class="tab-panel" style="display:none;">
+          <div class="toolbar compact">
+            <div class="field">
+              <label for="exportStatus" data-i18n="episodeExportStatus">Episode status</label>
+              <select id="exportStatus">
+                <option value="active" data-i18n="statusActive">Active</option>
+                <option value="all" data-i18n="statusAll">All</option>
+                <option value="superseded" data-i18n="statusSuperseded">Superseded</option>
+                <option value="archived" data-i18n="statusArchived">Archived</option>
+                <option value="deleted" data-i18n="statusDeleted">Deleted</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button id="exportProfilesBtn" data-i18n="exportProfiles">Export Profiles</button>
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button id="exportEpisodesBtn" class="primary" data-i18n="exportEpisodes">Export Episodes</button>
+            </div>
           </div>
           <div class="notice"><pre id="exportOutput"></pre></div>
         </section>
@@ -363,22 +483,28 @@
   <script src="/api/v1/plugins/_sdk/page-sdk.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
+    const EPISODE_STATUSES = ['active', 'superseded', 'archived', 'deleted'];
     let summary = null;
+    let lastEpisodeMode = 'list';
 
     const text = {
       empty: 'No data',
-      noScope: 'No memory scope selected.',
+      noScope: 'No memory space selected.',
       noKb: 'No memory knowledge base is configured.',
-      chooseScope: 'Choose a scope first.',
-      deriveFirst: 'Enter session_name and click Derive, or select a known scope.',
+      deriveFirst: 'Choose a known memory space or derive one from session_name.',
       queryRequired: 'Enter a search query.',
       delete: 'Delete',
-      confirmDelete: 'Delete this episode?',
+      archive: 'Archive',
+      restore: 'Restore',
+      confirmDelete: 'Permanently delete this episode?',
       kbReady: 'KB configured',
       kbMissing: 'KB missing',
-      scopeReady: 'Scope selected',
-      scopeMissing: 'No scope',
-      allSpeakers: 'Session only',
+      scopeReady: 'Space selected',
+      scopeMissing: 'No space',
+      allSpeakers: 'Session profile',
+      noEmbedding: 'embedding_model_uuid is required.',
+      total: 'total',
+      copiedJson: 'JSON exported below.',
     };
 
     function syncText() {
@@ -386,7 +512,6 @@
         text[key] = langbot.t(key, text[key]);
       });
     }
-
     function value(id) { return $(id).value.trim(); }
     function setValue(id, next) { $(id).value = next || ''; }
     function numeric(id, fallback) {
@@ -395,8 +520,11 @@
     }
     function escapeHtml(raw) {
       return String(raw == null ? '' : raw)
-        .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;').replaceAll("'", '&#039;');
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
     }
     function readableError(err) {
       if (!err) return 'Unknown error';
@@ -419,14 +547,17 @@
         senderId: value('senderId'),
       };
     }
-
     function selectedKb() {
       return {
         collectionId: value('collectionId'),
         embeddingModel: value('embeddingModel'),
       };
     }
-
+    function statusList(id) {
+      const selected = value(id);
+      if (selected === 'all') return EPISODE_STATUSES.slice();
+      return selected ? [selected] : ['active'];
+    }
     function requireScope(target) {
       const scope = selectedScope();
       if (!scope.scopeKey || !scope.userKey) {
@@ -435,7 +566,6 @@
       }
       return scope;
     }
-
     function requireKb(target, needEmbedding) {
       const kb = selectedKb();
       if (!kb.collectionId) {
@@ -443,12 +573,11 @@
         return null;
       }
       if (needEmbedding && !kb.embeddingModel) {
-        renderNotice(target, 'embedding_model_uuid is required for search.', true);
+        renderNotice(target, text.noEmbedding, true);
         return null;
       }
       return kb;
     }
-
     function setStatus(el, ok, label) {
       el.textContent = label;
       el.classList.toggle('ok', ok);
@@ -459,36 +588,40 @@
       summary = data;
       const kbEntries = data.kb_entries || [];
       const scopes = data.scopes || [];
-
-      $('kbCount').textContent = data.kb_count;
+      $('scopeCount').textContent = scopes.length;
       $('profileCount').textContent = data.profile_key_count;
       $('speakerProfileCount').textContent = data.speaker_profile_count;
       setStatus($('kbStatus'), kbEntries.length > 0, kbEntries.length > 0 ? text.kbReady : text.kbMissing);
       setStatus($('scopeStatus'), scopes.length > 0, scopes.length > 0 ? text.scopeReady : text.scopeMissing);
-
-      const cfg = data.plugin_config || {};
-      $('subtitle').textContent = 'max_profile_traits=' + (cfg.max_profile_traits || 20)
-        + ' · max_profile_preferences=' + (cfg.max_profile_preferences || 10);
-
       renderKb(kbEntries);
       renderScopeOptions(scopes);
       $('diagnosticsOutput').textContent = JSON.stringify(data, null, 2);
     }
 
     function renderKb(entries) {
-      $('kbList').innerHTML = entries.length ? entries.map((kb) => (
-        '<div class="item">'
-        + '<div class="item-head"><div class="item-title">' + escapeHtml(kb.id) + '</div><span class="pill ok">' + escapeHtml(kb.isolation || 'session') + '</span></div>'
-        + '<div class="muted">' + escapeHtml(kb.embedding_model_uuid || '-') + '</div>'
-        + '</div>'
-      )).join('') : '<div class="empty">' + text.noKb + '</div>';
-
-      if (entries.length === 1) {
-        const kb = entries[0];
-        setValue('collectionId', value('collectionId') || kb.id);
-        setValue('embeddingModel', value('embeddingModel') || kb.embedding_model_uuid || '');
-        setValue('isolation', value('isolation') || kb.isolation || 'session');
+      const select = $('kbSelect');
+      const current = value('collectionId');
+      select.innerHTML = entries.length
+        ? entries.map((kb, index) => '<option value="' + index + '">' + escapeHtml(kb.id) + '</option>').join('')
+        : '<option value="">' + text.noKb + '</option>';
+      if (!entries.length) {
+        setValue('collectionId', '');
+        setValue('embeddingModel', '');
+        $('kbDetail').textContent = text.noKb;
+        return;
       }
+      const selectedIndex = Math.max(0, entries.findIndex((kb) => kb.id === current));
+      select.value = String(selectedIndex);
+      applyKb(entries[selectedIndex]);
+    }
+
+    function applyKb(kb) {
+      if (!kb) return;
+      setValue('collectionId', kb.id || '');
+      setValue('embeddingModel', kb.embedding_model_uuid || '');
+      setValue('isolation', kb.isolation || 'session');
+      $('kbDetail').innerHTML = '<span class="pill ok">' + escapeHtml(kb.isolation || 'session') + '</span> '
+        + escapeHtml(kb.embedding_model_uuid || '-');
     }
 
     function renderScopeOptions(scopes) {
@@ -501,8 +634,7 @@
         const selectedIndex = Math.max(0, scopes.findIndex((scope) => scope.scope_key === currentScope));
         scopeSelect.value = String(selectedIndex);
         applyScope(scopes[selectedIndex]);
-      }
-      else {
+      } else {
         if (!currentScope) {
           setValue('scopeKey', '');
           setValue('userKey', '');
@@ -584,46 +716,48 @@
       }
     }
 
-    function renderEpisodes(target, episodes, mode) {
-      if (!episodes || episodes.length === 0) {
+    function renderEpisodes(target, data, mode) {
+      const episodes = data.episodes || [];
+      if (!episodes.length) {
         renderNotice(target, text.empty, false);
         return;
       }
-      target.innerHTML = episodes.map((ep) => {
+      const total = data.total == null || data.total < 0 ? '' : '<span class="pill">' + escapeHtml(data.total) + ' ' + text.total + '</span>';
+      target.innerHTML = total + episodes.map((ep) => {
         const tags = (ep.tags || []).filter(Boolean).map((tag) => '<span class="pill">' + escapeHtml(tag) + '</span>').join('');
+        const status = ep.status || 'active';
+        const statusClass = status === 'active' ? 'ok' : (status === 'archived' || status === 'superseded' ? 'warn' : 'danger');
+        const canRestore = status !== 'active';
+        const statusAction = canRestore
+          ? '<button data-status="active" data-episode="' + escapeHtml(ep.id || '') + '">' + text.restore + '</button>'
+          : '<button data-status="archived" data-episode="' + escapeHtml(ep.id || '') + '">' + text.archive + '</button>';
         return '<article class="item">'
           + '<div class="item-head"><div class="item-title">' + escapeHtml(ep.id || '-') + '</div><span class="muted">' + escapeHtml(ep.timestamp || '-') + '</span></div>'
-          + '<div>' + escapeHtml(ep.content || '') + '</div>'
+          + '<div class="item-content">' + escapeHtml(ep.content || '') + '</div>'
           + '<div class="tags">'
-          + '<span class="pill">' + escapeHtml(ep.status || 'active') + '</span>'
+          + '<span class="pill ' + statusClass + '">' + escapeHtml(status) + '</span>'
           + '<span class="pill">importance ' + escapeHtml(ep.importance || 2) + '</span>'
           + (ep.sender_name ? '<span class="pill">' + escapeHtml(ep.sender_name) + '</span>' : '')
+          + (ep.sender_id ? '<span class="pill">' + escapeHtml(ep.sender_id) + '</span>' : '')
           + (ep.source ? '<span class="pill">' + escapeHtml(ep.source) + '</span>' : '')
           + tags
           + '</div>'
-          + '<div class="actions" style="margin-top: 10px;"><button class="danger" data-delete="' + escapeHtml(ep.id || '') + '">' + text.delete + '</button></div>'
+          + '<div class="item-actions">' + statusAction
+          + '<button class="danger" data-delete="' + escapeHtml(ep.id || '') + '">' + text.delete + '</button></div>'
           + '</article>';
       }).join('');
-      target.querySelectorAll('[data-delete]').forEach((button) => {
-        button.addEventListener('click', async () => {
-          const episodeId = button.getAttribute('data-delete');
-          if (!episodeId || !window.confirm(text.confirmDelete)) return;
-          const kb = requireKb(target, false);
-          const scope = requireScope(target);
-          if (!kb || !scope) return;
-          try {
-            await api('/episodes/delete', {
-              collection_id: kb.collectionId,
-              user_key: scope.userKey,
-              episode_id: episodeId,
-            });
-            if (mode === 'search') await searchEpisodes();
-            else await listEpisodes();
-          } catch (err) {
-            renderError(target, err);
-          }
-        });
+      target.querySelectorAll('[data-status]').forEach((button) => {
+        button.addEventListener('click', () => setEpisodeStatus(button.getAttribute('data-episode'), button.getAttribute('data-status')));
       });
+      target.querySelectorAll('[data-delete]').forEach((button) => {
+        button.addEventListener('click', () => deleteEpisode(button.getAttribute('data-delete')));
+      });
+      lastEpisodeMode = mode;
+    }
+
+    async function reloadEpisodes() {
+      if (lastEpisodeMode === 'search') await searchEpisodes();
+      else await listEpisodes();
     }
 
     async function listEpisodes() {
@@ -637,8 +771,9 @@
           user_key: scope.userKey,
           page: numeric('pageNo', 1),
           page_size: 10,
+          statuses: statusList('episodeStatus'),
         });
-        renderEpisodes(target, data.episodes, 'list');
+        renderEpisodes(target, data, 'list');
       } catch (err) {
         renderError(target, err);
       }
@@ -660,11 +795,88 @@
           embedding_model_uuid: kb.embeddingModel,
           user_key: scope.userKey,
           query: value('episodeQuery'),
-          top_k: numeric('topK', 10),
+          top_k: 10,
+          sender_id: scope.senderId,
           source: value('source'),
           importance_min: importanceRaw ? Number.parseInt(importanceRaw, 10) : null,
+          statuses: statusList('episodeStatus'),
         });
-        renderEpisodes(target, data.episodes, 'search');
+        renderEpisodes(target, data, 'search');
+      } catch (err) {
+        renderError(target, err);
+      }
+    }
+
+    async function setEpisodeStatus(episodeId, status) {
+      const target = $('episodesOutput');
+      const kb = requireKb(target, true);
+      const scope = requireScope(target);
+      if (!episodeId || !kb || !scope) return;
+      try {
+        await api('/episodes/status', {
+          collection_id: kb.collectionId,
+          embedding_model_uuid: kb.embeddingModel,
+          scope_key: scope.scopeKey,
+          user_key: scope.userKey,
+          episode_id: episodeId,
+          status,
+        });
+        await reloadEpisodes();
+      } catch (err) {
+        renderError(target, err);
+      }
+    }
+
+    async function deleteEpisode(episodeId) {
+      const target = $('episodesOutput');
+      if (!episodeId || !window.confirm(text.confirmDelete)) return;
+      const kb = requireKb(target, false);
+      const scope = requireScope(target);
+      if (!kb || !scope) return;
+      try {
+        await api('/episodes/delete', {
+          collection_id: kb.collectionId,
+          scope_key: scope.scopeKey,
+          user_key: scope.userKey,
+          episode_id: episodeId,
+        });
+        await reloadEpisodes();
+      } catch (err) {
+        renderError(target, err);
+      }
+    }
+
+    function renderAudit(data) {
+      const target = $('auditOutput');
+      const entries = data.entries || [];
+      if (!entries.length) {
+        renderNotice(target, text.empty, false);
+        return;
+      }
+      const total = data.total == null ? '' : '<span class="pill">' + escapeHtml(data.total) + ' ' + text.total + '</span>';
+      target.innerHTML = total + entries.map((entry) => (
+        '<article class="item">'
+        + '<div class="item-head"><div class="item-title">' + escapeHtml(entry.operation || '-') + '</div><span class="muted">' + escapeHtml(entry.timestamp || '-') + '</span></div>'
+        + '<div class="item-content">' + escapeHtml(entry.summary || '') + '</div>'
+        + '<div class="tags">'
+        + '<span class="pill">' + escapeHtml(entry.target_type || '-') + '</span>'
+        + '<span class="pill">' + escapeHtml(entry.target_id || '-') + '</span>'
+        + (entry.sender_name ? '<span class="pill">' + escapeHtml(entry.sender_name) + '</span>' : '')
+        + '</div>'
+        + '</article>'
+      )).join('');
+    }
+
+    async function loadAudit() {
+      const target = $('auditOutput');
+      const scope = requireScope(target);
+      if (!scope) return;
+      try {
+        renderAudit(await api('/audit/list', {
+          scope_key: scope.scopeKey,
+          page: numeric('auditPage', 1),
+          page_size: 10,
+        }));
       } catch (err) {
         renderError(target, err);
       }
@@ -673,13 +885,55 @@
     async function exportProfiles() {
       const target = $('exportOutput');
       const scope = selectedScope();
-      if (!scope.scopeKey || !scope.userKey) {
+      if (!scope.scopeKey) {
         target.textContent = text.deriveFirst;
         return;
       }
       try {
         target.textContent = JSON.stringify(await api('/export-profiles', {
           scope_key: scope.scopeKey,
+          user_key: scope.userKey,
+        }), null, 2);
+      } catch (err) {
+        target.textContent = readableError(err);
+      }
+    }
+
+    async function exportEpisodes() {
+      const target = $('exportOutput');
+      const kb = selectedKb();
+      const scope = selectedScope();
+      if (!kb.collectionId) {
+        target.textContent = text.noKb;
+        return;
+      }
+      if (!scope.scopeKey || !scope.userKey) {
+        target.textContent = text.deriveFirst;
+        return;
+      }
+      try {
+        target.textContent = JSON.stringify(await api('/episodes/export', {
+          collection_id: kb.collectionId,
+          scope_key: scope.scopeKey,
+          user_key: scope.userKey,
+          statuses: statusList('exportStatus'),
+        }), null, 2);
+      } catch (err) {
+        target.textContent = readableError(err);
+      }
+    }
+
+    async function exportAudit() {
+      const target = $('exportOutput');
+      const scope = selectedScope();
+      if (!scope.scopeKey) {
+        target.textContent = text.deriveFirst;
+        return;
+      }
+      try {
+        target.textContent = JSON.stringify(await api('/audit/export', {
+          scope_key: scope.scopeKey,
+          user_key: scope.userKey,
         }), null, 2);
       } catch (err) {
         target.textContent = readableError(err);
@@ -705,19 +959,28 @@
       $('loadProfileBtn').addEventListener('click', loadProfile);
       $('listEpisodesBtn').addEventListener('click', listEpisodes);
       $('searchEpisodesBtn').addEventListener('click', searchEpisodes);
+      $('loadAuditBtn').addEventListener('click', loadAudit);
       $('exportProfilesBtn').addEventListener('click', exportProfiles);
-      $('toggleDebugBtn').addEventListener('click', () => {
-        $('debugPanel').classList.toggle('open');
-        $('kbDebug').classList.toggle('open');
-      });
+      $('exportEpisodesBtn').addEventListener('click', exportEpisodes);
+      $('exportAuditBtn').addEventListener('click', exportAudit);
+      $('toggleRawBtn').addEventListener('click', () => $('rawFields').classList.toggle('open'));
       $('scopeSelect').addEventListener('change', () => {
         const scopes = (summary && summary.scopes) || [];
         const selected = scopes[Number.parseInt($('scopeSelect').value, 10)];
-        if (selected) applyScope(selected);
+        if (selected) {
+          applyScope(selected);
+          loadProfile();
+        }
       });
       $('speakerSelect').addEventListener('change', () => {
         setValue('senderId', $('speakerSelect').value);
+        updateScopePreview();
         loadProfile();
+      });
+      $('kbSelect').addEventListener('change', () => {
+        const entries = (summary && summary.kb_entries) || [];
+        const selected = entries[Number.parseInt($('kbSelect').value, 10)];
+        if (selected) applyKb(selected);
       });
       ['scopeKey', 'userKey', 'senderId'].forEach((id) => {
         $(id).addEventListener('input', updateScopePreview);
