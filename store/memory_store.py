@@ -1363,6 +1363,180 @@ class MemoryStore:
         filtered_total = len(included) if scanned_all else -1
         return episodes, filtered_total
 
+    @staticmethod
+    def _episode_matches_bulk_filters(
+        episode: dict[str, Any],
+        *,
+        sender_id: str = "",
+        tag: str = "",
+        before: str = "",
+        include_statuses: list[str] | set[str] | tuple[str, ...] | None = None,
+    ) -> bool:
+        if sender_id and episode.get("sender_id") != sender_id:
+            return False
+        if tag and tag not in set(episode.get("tags", [])):
+            return False
+        if before and str(episode.get("timestamp", "") or "") >= before:
+            return False
+        if not MemoryStore.episode_status_included(
+            {"status": episode.get("status", "")},
+            include_statuses,
+        ):
+            return False
+        return True
+
+    async def export_episodes_by_user(
+        self,
+        collection_id: str,
+        user_key: str,
+        *,
+        include_statuses: list[str] | set[str] | tuple[str, ...] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Export all L2 episodes for a single user_key scope."""
+        exported: list[dict[str, Any]] = []
+        offset = 0
+        page_size = 100
+        while True:
+            episodes, total = await self.list_episodes(
+                collection_id=collection_id,
+                user_key=user_key,
+                limit=page_size,
+                offset=offset,
+                include_statuses=include_statuses,
+            )
+            exported.extend(episodes)
+            if not episodes:
+                break
+            offset += len(episodes)
+            if total >= 0 and offset >= total:
+                break
+            if len(episodes) < page_size:
+                break
+        return exported
+
+    async def import_episodes_for_user(
+        self,
+        collection_id: str,
+        embedding_model_uuid: str,
+        user_key: str,
+        episodes: list[dict[str, Any]],
+        *,
+        bot_uuid: str = "",
+    ) -> list[dict[str, Any]]:
+        """Import L2 episodes into the current user_key scope.
+
+        Any user_key in the input is intentionally ignored so imported data
+        cannot overwrite or leak into another scope.
+        """
+        imported: list[dict[str, Any]] = []
+        for raw in episodes:
+            if not isinstance(raw, dict):
+                raise ValueError("each imported episode must be an object")
+
+            content = str(raw.get("content", "") or "").strip()
+            if not content:
+                raise ValueError("imported episode content cannot be empty")
+
+            tags = self._normalize_text_list(raw.get("tags", []))
+            importance_raw = raw.get("importance", 2)
+            try:
+                importance = int(importance_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("importance must be an integer from 1 to 5") from exc
+            importance = max(1, min(5, importance))
+
+            timestamp = self.normalize_optional_timestamp(
+                str(raw.get("timestamp", "") or "")
+            ) or self._now_timestamp()
+            status = self.normalize_episode_status_value(raw.get("status", "active"))
+            source = str(raw.get("source", "") or "import").strip() or "import"
+            sender_id = str(raw.get("sender_id", "") or "").strip()
+            sender_name = str(raw.get("sender_name", "") or "").strip()
+            superseded_by = str(raw.get("superseded_by", "") or "").strip()
+            imported_episode_id = str(
+                raw.get("id", "") or raw.get("episode_id", "") or ""
+            ).strip()
+            episode_id = uuid.uuid4().hex[:12]
+
+            metadata = {
+                "content": content,
+                "tags": ",".join(tags),
+                "importance": str(importance),
+                "timestamp": timestamp,
+                "user_key": user_key,
+                "source": source,
+                "sender_id": sender_id,
+                "sender_name": sender_name,
+                "bot_uuid": bot_uuid,
+                "status": status,
+            }
+            if superseded_by:
+                metadata["superseded_by"] = superseded_by
+            if imported_episode_id:
+                metadata["imported_episode_id"] = imported_episode_id
+
+            vectors = await self.plugin.invoke_embedding(embedding_model_uuid, [content])
+            await self.plugin.vector_upsert(
+                collection_id=collection_id,
+                vectors=vectors,
+                ids=[episode_id],
+                metadata=[metadata],
+                documents=[content],
+            )
+            imported.append({
+                "id": episode_id,
+                "imported_episode_id": imported_episode_id,
+                "content": content,
+                "tags": tags,
+                "importance": importance,
+                "timestamp": timestamp,
+                "user_key": user_key,
+                "sender_id": sender_id,
+                "sender_name": sender_name,
+                "source": source,
+                "status": status,
+                "superseded_by": superseded_by,
+            })
+
+        return imported
+
+    async def delete_episodes_by_filters(
+        self,
+        collection_id: str,
+        user_key: str,
+        *,
+        sender_id: str = "",
+        tag: str = "",
+        before: str = "",
+        include_statuses: list[str] | set[str] | tuple[str, ...] | None = None,
+    ) -> tuple[int, list[str]]:
+        """Delete scoped L2 episodes matching explicit management filters."""
+        normalized_before = self.normalize_optional_timestamp(before) if before else ""
+        candidates = await self.export_episodes_by_user(
+            collection_id=collection_id,
+            user_key=user_key,
+            include_statuses=include_statuses,
+        )
+        matched_ids = [
+            episode["id"]
+            for episode in candidates
+            if self._episode_matches_bulk_filters(
+                episode,
+                sender_id=sender_id,
+                tag=tag,
+                before=normalized_before,
+                include_statuses=include_statuses,
+            )
+        ]
+        deleted = 0
+        for episode_id in matched_ids:
+            deleted += await self.delete_episode_by_id(
+                collection_id=collection_id,
+                episode_id=episode_id,
+                user_key=user_key,
+            )
+        return deleted, matched_ids
+
     async def delete_episode_by_id(
         self,
         collection_id: str,
