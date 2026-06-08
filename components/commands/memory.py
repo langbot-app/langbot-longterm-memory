@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import uuid
 from typing import AsyncGenerator, NamedTuple
 
 from langbot_plugin.api.definition.components.command.command import Command
@@ -27,6 +28,19 @@ class _RuntimeContext(NamedTuple):
 
 
 class Memory(Command):
+    @staticmethod
+    def _status_rank(status: str) -> int:
+        return {"ERROR": 0, "WARN": 1, "OK": 2}.get(status, 1)
+
+    @classmethod
+    def _combine_status(cls, statuses: list[str]) -> str:
+        if not statuses:
+            return "WARN"
+        return min(statuses, key=cls._status_rank)
+
+    @staticmethod
+    def _health_line(status: str, detail: str) -> str:
+        return f"- {status}: {detail}"
 
     @staticmethod
     async def _build_runtime_context(
@@ -64,6 +78,139 @@ class Memory(Command):
             return False
         pipeline_kbs = await api.list_pipeline_knowledge_bases()
         return any(kb.get("uuid") == kb_id for kb in pipeline_kbs)
+
+    @staticmethod
+    async def _run_metadata_filter_probe(
+        plugin,
+        ctx: _RuntimeContext,
+        embedding_model_uuid: str,
+    ) -> tuple[str, list[str]]:
+        probe_id = uuid.uuid4().hex[:10]
+        id_a = f"ltm-health-{probe_id}-a"
+        id_b = f"ltm-health-{probe_id}-b"
+        user_a = f"ltm-health:{probe_id}:a"
+        user_b = f"ltm-health:{probe_id}:b"
+        probe_text_a = f"LongTermMemory health probe {probe_id} alpha"
+        probe_text_b = f"LongTermMemory health probe {probe_id} beta"
+        ids = [id_a, id_b]
+        lines: list[str] = []
+        status = "OK"
+
+        def mark(new_status: str) -> None:
+            nonlocal status
+            status = Memory._combine_status([status, new_status])
+
+        try:
+            vectors = await plugin.invoke_embedding(
+                embedding_model_uuid,
+                [probe_text_a, probe_text_b],
+            )
+            await plugin.vector_upsert(
+                collection_id=ctx.kb_id,
+                vectors=vectors,
+                ids=ids,
+                metadata=[
+                    {
+                        "content": probe_text_a,
+                        "user_key": user_a,
+                        "source": "health_probe",
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    },
+                    {
+                        "content": probe_text_b,
+                        "user_key": user_b,
+                        "source": "health_probe",
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    },
+                ],
+                documents=[probe_text_a, probe_text_b],
+            )
+            lines.append("OK: wrote temporary metadata probe records")
+
+            search_results = await plugin.vector_search(
+                collection_id=ctx.kb_id,
+                query_vector=vectors[0],
+                top_k=5,
+                filters={"user_key": user_a},
+            )
+            search_ids = {item.get("id") for item in search_results}
+            if id_b in search_ids:
+                mark("ERROR")
+                lines.append(
+                    "ERROR: vector_search filter leaked another user_key result"
+                )
+            elif id_a in search_ids:
+                lines.append("OK: vector_search respects user_key metadata filter")
+            else:
+                mark("WARN")
+                lines.append(
+                    "WARN: vector_search filter did not return its own probe record"
+                )
+
+            try:
+                listed = await plugin.vector_list(
+                    collection_id=ctx.kb_id,
+                    filters={"user_key": user_a},
+                    limit=10,
+                    offset=0,
+                )
+                list_ids = {item.get("id") for item in listed.get("items", [])}
+                if id_b in list_ids:
+                    mark("ERROR")
+                    lines.append(
+                        "ERROR: vector_list filter leaked another user_key result"
+                    )
+                elif id_a in list_ids:
+                    lines.append("OK: vector_list respects user_key metadata filter")
+                else:
+                    mark("WARN")
+                    lines.append(
+                        "WARN: vector_list did not return its own probe record"
+                    )
+            except Exception as exc:
+                mark("WARN")
+                lines.append(f"WARN: vector_list probe failed: {exc}")
+
+            try:
+                deleted = await plugin.vector_delete(
+                    collection_id=ctx.kb_id,
+                    filters={"user_key": user_a},
+                )
+                if deleted == 1:
+                    lines.append("OK: vector_delete respects user_key metadata filter")
+                elif deleted == 0:
+                    mark("WARN")
+                    lines.append(
+                        "WARN: vector_delete filter did not delete its own probe record"
+                    )
+                else:
+                    mark("ERROR")
+                    lines.append(
+                        "ERROR: vector_delete filter deleted more probe records than expected"
+                    )
+            except Exception as exc:
+                mark("WARN")
+                lines.append(f"WARN: vector_delete filter probe failed: {exc}")
+
+        except Exception as exc:
+            mark("ERROR")
+            lines.append(f"ERROR: metadata filter probe failed: {exc}")
+        finally:
+            cleanup_lines = []
+            for episode_id in ids:
+                try:
+                    await plugin.vector_delete(
+                        collection_id=ctx.kb_id,
+                        file_ids=[episode_id],
+                    )
+                    cleanup_lines.append(f"OK: cleaned probe record {episode_id}")
+                except Exception as exc:
+                    cleanup_lines.append(
+                        f"WARN: failed to clean probe record {episode_id}: {exc}"
+                    )
+            lines.extend(cleanup_lines)
+
+        return status, lines
 
     def __init__(self):
         super().__init__()
@@ -121,6 +268,90 @@ class Memory(Command):
                 lines.append(f"L2 (Episodic): KB={ctx.kb_id[:12]}... configured but inactive in this pipeline")
             else:
                 lines.append("L2 (Episodic): no KB configured")
+
+            yield CommandReturn(text="\n".join(lines))
+
+        @self.subcommand(
+            name="health",
+            help="Check memory KB configuration and metadata filter safety",
+            usage="!memory health",
+            aliases=["h"],
+        )
+        async def health_cmd(
+            self: Memory,
+            context: ExecuteContext,
+        ) -> AsyncGenerator[CommandReturn, None]:
+            ctx = await self._build_runtime_context(self.plugin, context)
+            statuses: list[str] = []
+            lines = ["[Memory Health]"]
+
+            if ctx.kb_id:
+                statuses.append("OK")
+                lines.append(self._health_line("OK", f"memory KB configured: {ctx.kb_id}"))
+            else:
+                statuses.append("ERROR")
+                lines.append(self._health_line("ERROR", "no memory KB configured"))
+
+            kb_active = await self._is_memory_kb_active(
+                self.plugin.memory_store,
+                ctx.api,
+                ctx.kb_id,
+            )
+            if kb_active:
+                statuses.append("OK")
+                lines.append(self._health_line("OK", "memory KB is active in this pipeline"))
+            else:
+                statuses.append("ERROR")
+                lines.append(
+                    self._health_line(
+                        "ERROR",
+                        "memory KB is not active in the current pipeline",
+                    )
+                )
+
+            embedding_model_uuid = str(ctx.config.get("embedding_model_uuid", "") or "")
+            if embedding_model_uuid:
+                statuses.append("OK")
+                lines.append(
+                    self._health_line(
+                        "OK",
+                        f"embedding model configured: {embedding_model_uuid}",
+                    )
+                )
+            else:
+                statuses.append("ERROR")
+                lines.append(self._health_line("ERROR", "no embedding model configured"))
+
+            if ctx.kb_id and kb_active and embedding_model_uuid:
+                probe_status, probe_lines = await self._run_metadata_filter_probe(
+                    self.plugin,
+                    ctx,
+                    embedding_model_uuid,
+                )
+                statuses.append(probe_status)
+                lines.extend(f"- {line}" for line in probe_lines)
+            else:
+                statuses.append("WARN")
+                lines.append(
+                    self._health_line(
+                        "WARN",
+                        "metadata filter probe skipped because prerequisites failed",
+                    )
+                )
+
+            final_status = self._combine_status(statuses)
+            if final_status == "ERROR":
+                lines.append(
+                    "Result: ERROR - LongTermMemory is not safe for scoped recall in this pipeline yet."
+                )
+            elif final_status == "WARN":
+                lines.append(
+                    "Result: WARN - LongTermMemory can run, but some safety checks need attention."
+                )
+            else:
+                lines.append(
+                    "Result: OK - memory KB configuration and scoped metadata filters look usable."
+                )
 
             yield CommandReturn(text="\n".join(lines))
 
@@ -295,7 +526,7 @@ class Memory(Command):
                 return
 
             episode_id = context.crt_params[0].strip()
-            count = await store.delete_episode_by_id(
+            await store.delete_episode_by_id(
                 collection_id=ctx.kb_id,
                 episode_id=episode_id,
                 user_key=ctx.user_key,
