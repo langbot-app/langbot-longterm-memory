@@ -745,6 +745,31 @@ class MemoryStore:
             return []
         return list(entries)
 
+    # ==================== injection snapshot ====================
+
+    @staticmethod
+    def _injection_snapshot_key(scope_key: str) -> str:
+        return f"inj:{scope_key}"
+
+    async def save_injection_snapshot(
+        self,
+        scope_key: str,
+        snapshot: dict[str, Any],
+    ) -> None:
+        """Persist the latest memory-injection snapshot for a scope.
+
+        Only the most recent snapshot per scope is retained (overwrite), so the
+        memory console can show "what the bot actually remembered last turn"
+        without depending on log scraping or the live query lifecycle.
+        """
+        await self._write_json(self._injection_snapshot_key(scope_key), snapshot)
+
+    async def get_injection_snapshot(self, scope_key: str) -> dict[str, Any] | None:
+        snapshot = await self._read_json(self._injection_snapshot_key(scope_key))
+        if not isinstance(snapshot, dict):
+            return None
+        return snapshot
+
     async def append_memory_candidate(
         self,
         scope_key: str,
@@ -2034,3 +2059,126 @@ class MemoryStore:
             parts.append(f"- Last updated: {profile['updated_at']}")
 
         return "\n".join(parts)
+
+    # ======================== health probe ========================
+
+    @staticmethod
+    def _worse_status(current: str, candidate: str) -> str:
+        rank = {"ERROR": 0, "WARN": 1, "OK": 2}
+        return min(current, candidate, key=lambda s: rank.get(s, 1))
+
+    async def run_metadata_filter_probe(
+        self,
+        collection_id: str,
+        embedding_model_uuid: str,
+    ) -> dict[str, Any]:
+        """Probe whether the vector backend honours ``user_key`` metadata filters.
+
+        Writes two temporary records under different ``user_key`` values, then
+        verifies that search / list / delete with a scoped filter never leaks the
+        other record. Returns a structured result so both the ``!memory health``
+        command and the memory console can render it. The probe always cleans up
+        its temporary records.
+        """
+        probe_id = uuid.uuid4().hex[:10]
+        id_a = f"ltm-health-{probe_id}-a"
+        id_b = f"ltm-health-{probe_id}-b"
+        user_a = f"ltm-health:{probe_id}:a"
+        user_b = f"ltm-health:{probe_id}:b"
+        text_a = f"LongTermMemory health probe {probe_id} alpha"
+        text_b = f"LongTermMemory health probe {probe_id} beta"
+        ids = [id_a, id_b]
+
+        checks: list[dict[str, str]] = []
+        status = "OK"
+
+        def add(check_id: str, check_status: str, detail: str) -> None:
+            nonlocal status
+            checks.append({"id": check_id, "status": check_status, "detail": detail})
+            status = self._worse_status(status, check_status)
+
+        try:
+            vectors = await self.plugin.invoke_embedding(
+                embedding_model_uuid,
+                [text_a, text_b],
+            )
+            timestamp = self._now_timestamp()
+            await self.plugin.vector_upsert(
+                collection_id=collection_id,
+                vectors=vectors,
+                ids=ids,
+                metadata=[
+                    {
+                        "content": text_a,
+                        "user_key": user_a,
+                        "source": "health_probe",
+                        "timestamp": timestamp,
+                    },
+                    {
+                        "content": text_b,
+                        "user_key": user_b,
+                        "source": "health_probe",
+                        "timestamp": timestamp,
+                    },
+                ],
+                documents=[text_a, text_b],
+            )
+            add("write", "OK", "wrote temporary metadata probe records")
+
+            search_results = await self.plugin.vector_search(
+                collection_id=collection_id,
+                query_vector=vectors[0],
+                top_k=5,
+                filters={"user_key": user_a},
+            )
+            search_ids = {item.get("id") for item in search_results}
+            if id_b in search_ids:
+                add("search", "ERROR", "vector_search filter leaked another user_key result")
+            elif id_a in search_ids:
+                add("search", "OK", "vector_search respects user_key metadata filter")
+            else:
+                add("search", "WARN", "vector_search filter did not return its own probe record")
+
+            try:
+                listed = await self.plugin.vector_list(
+                    collection_id=collection_id,
+                    filters={"user_key": user_a},
+                    limit=10,
+                    offset=0,
+                )
+                list_ids = {item.get("id") for item in listed.get("items", [])}
+                if id_b in list_ids:
+                    add("list", "ERROR", "vector_list filter leaked another user_key result")
+                elif id_a in list_ids:
+                    add("list", "OK", "vector_list respects user_key metadata filter")
+                else:
+                    add("list", "WARN", "vector_list did not return its own probe record")
+            except Exception as exc:
+                add("list", "WARN", f"vector_list probe failed: {exc}")
+
+            try:
+                deleted = await self.plugin.vector_delete(
+                    collection_id=collection_id,
+                    filters={"user_key": user_a},
+                )
+                if deleted == 1:
+                    add("delete", "OK", "vector_delete respects user_key metadata filter")
+                elif deleted == 0:
+                    add("delete", "WARN", "vector_delete filter did not delete its own probe record")
+                else:
+                    add("delete", "ERROR", "vector_delete filter deleted more probe records than expected")
+            except Exception as exc:
+                add("delete", "WARN", f"vector_delete filter probe failed: {exc}")
+        except Exception as exc:
+            add("probe", "ERROR", f"metadata filter probe failed: {exc}")
+        finally:
+            for episode_id in ids:
+                try:
+                    await self.plugin.vector_delete(
+                        collection_id=collection_id,
+                        file_ids=[episode_id],
+                    )
+                except Exception as exc:
+                    add("cleanup", "WARN", f"failed to clean probe record {episode_id}: {exc}")
+
+        return {"status": status, "checks": checks}

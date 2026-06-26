@@ -23,6 +23,8 @@ class FakeStore:
         self.status_updates: list[dict] = []
         self.deleted: list[dict] = []
         self.list_calls: list[dict] = []
+        self.probe_calls: list[dict] = []
+        self.snapshots: dict[str, dict] = {}
         self.episodes = [
             {
                 "id": "ep-1",
@@ -105,6 +107,27 @@ class FakeStore:
             "scope_key": scope_key,
             "profile": {"name": "Release group"},
         }]
+
+    async def get_kb_configs(self):
+        return {
+            "kb-1": {"embedding_model_uuid": "emb-1", "isolation": "session"},
+        }
+
+    async def run_metadata_filter_probe(self, collection_id, embedding_model_uuid):
+        self.probe_calls.append({
+            "collection_id": collection_id,
+            "embedding_model_uuid": embedding_model_uuid,
+        })
+        return {
+            "status": "OK",
+            "checks": [
+                {"id": "write", "status": "OK", "detail": "wrote probe records"},
+                {"id": "search", "status": "OK", "detail": "search respects filter"},
+            ],
+        }
+
+    async def get_injection_snapshot(self, scope_key):
+        return self.snapshots.get(scope_key)
 
 
 class FakePlugin:
@@ -203,3 +226,67 @@ async def test_profile_export_writes_scoped_audit(page):
     assert data["profiles"][0]["profile"]["name"] == "Release group"
     assert page.plugin.memory_store.audit_entries[-1]["operation"] == "export_profiles"
     assert page.plugin.memory_store.audit_entries[-1]["target_type"] == "profile"
+
+
+@pytest.mark.asyncio
+async def test_health_runs_probe_and_combines_status(page):
+    data = await _post(page, "/health", {
+        "collection_id": "kb-1",
+        "embedding_model_uuid": "emb-1",
+    })
+
+    assert data["status"] == "OK"
+    check_ids = [check["id"] for check in data["checks"]]
+    assert check_ids[:2] == ["kb_config", "embedding"]
+    assert "search" in check_ids
+    assert page.plugin.memory_store.probe_calls == [{
+        "collection_id": "kb-1",
+        "embedding_model_uuid": "emb-1",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_health_skips_probe_when_kb_missing(page):
+    data = await _post(page, "/health", {
+        "collection_id": "missing-kb",
+        "embedding_model_uuid": "emb-1",
+    })
+
+    assert data["status"] == "ERROR"
+    statuses = {check["id"]: check["status"] for check in data["checks"]}
+    assert statuses["kb_config"] == "ERROR"
+    assert statuses["probe"] == "WARN"
+    assert page.plugin.memory_store.probe_calls == []
+
+
+@pytest.mark.asyncio
+async def test_health_falls_back_to_configured_embedding_model(page):
+    data = await _post(page, "/health", {"collection_id": "kb-1"})
+
+    assert data["status"] == "OK"
+    assert page.plugin.memory_store.probe_calls == [{
+        "collection_id": "kb-1",
+        "embedding_model_uuid": "emb-1",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_injection_returns_snapshot_when_present(page):
+    page.plugin.memory_store.snapshots["bot-1:group_1"] = {
+        "injected": True,
+        "block_count": 2,
+        "episodes": [{"content": "Alice flies to Tokyo next Tuesday"}],
+    }
+
+    data = await _post(page, "/injection", {"scope_key": "bot-1:group_1"})
+
+    assert data["scope_key"] == "bot-1:group_1"
+    assert data["snapshot"]["injected"] is True
+    assert data["snapshot"]["episodes"][0]["content"].startswith("Alice")
+
+
+@pytest.mark.asyncio
+async def test_injection_returns_none_when_absent(page):
+    data = await _post(page, "/injection", {"scope_key": "bot-1:group_9"})
+
+    assert data == {"scope_key": "bot-1:group_9", "snapshot": None}

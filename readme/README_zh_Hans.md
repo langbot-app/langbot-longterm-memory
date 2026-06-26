@@ -14,6 +14,7 @@ LangBot 长期记忆插件，采用双层记忆设计：
 - 通过 EventListener 自动注入画像和当前说话人身份
 - 通过 EventListener 在模型调用前自动检索并注入相关情景记忆
 - 提供 `!memory` 命令用于查看和调试记忆状态
+- 提供网页版**记忆控制台**，用于可视化查看：画像、情景记忆（支持分页）、审计日志、导出、metadata 隔离健康检查，以及最近一次记忆注入快照
 - 提供 `!memory list [page]` 命令，用于分页浏览情景记忆
 - 提供 `!memory forget <episode_id>` 命令，用于删除单条情景记忆
 - 提供 `!memory search <query>` 命令，用于搜索情景记忆（结果包含 episode ID）
@@ -446,9 +447,26 @@ SDK 现在已经提供了 `vector_list` API，可以分页枚举向量库内容�
 
 所以它们是互补关系，不是简单叠加两次同样的召回。
 
+## 记忆控制台
+
+除了 `!memory` 命令外，插件还提供一个网页版**记忆控制台**（注册为插件的 Page 组件），用于可视化查看与维护。它通过受作用域约束的页面接口与插件通信，所有操作都不会越过当前选中的记忆空间。
+
+控制台由「记忆空间侧栏」和若干标签页组成：
+
+- **记忆空间侧栏** —— 选择已有作用域，或填入 `bot_uuid` / `session_name` / `isolation` 并点击 **推导**，自动计算出对应的 `scope_key` 与 `user_key`；「高级 / 原始字段」区域向高级用户暴露底层 key。
+- **画像** —— 查看当前作用域的会话画像和当前说话人画像。
+- **情景记忆** —— 对当前 `user_key` 分页列出或语义搜索 L2 情景记忆，可按生命周期状态过滤，并就地归档、恢复或删除单条记忆。每个写操作都会写入作用域审计条目，与对应的 `!memory` 命令一致。
+- **注入快照** —— 加载该作用域**最近一次记忆注入快照**：本轮是否注入、注入了多少 block 和字符、当前说话人、所用的会话/说话人画像，以及自动召回的 L2 情景记忆。无需翻日志即可回答「机器人上一轮到底记住了什么」。
+- **审计** —— 分页浏览并导出作用域审计日志。
+- **导出** —— 将当前作用域的 L1 画像和 L2 情景记忆导出为 JSON。
+- **诊断** —— 点击 **运行健康检查**，可直接在界面中执行与 `!memory health` 相同的 metadata 隔离探针（知识库配置、embedding 模型，以及 search / list / delete 上的 `user_key` 过滤隔离），以红/黄/绿状态卡片呈现。在信任作用域召回之前建议先运行，尤其是上文列为「不支持」的后端。注意：控制台无法验证知识库是否已挂载到某条具体的流水线——这一项请在流水线中运行 `!memory health` 确认。
+
+控制台支持 i18n（`en_US`、`zh_Hans`），并跟随宿主 LangBot 的明暗主题。
+
 ## 组件
 
 - KnowledgeEngine: [memory_engine.py](../components/knowledge_engine/memory_engine.py)
 - EventListener: [memory_injector.py](../components/event_listener/memory_injector.py)
 - Tools: [remember.py](../components/tools/remember.py), [recall_memory.py](../components/tools/recall_memory.py), [update_profile.py](../components/tools/update_profile.py), [forget.py](../components/tools/forget.py)
 - Command: [memory.py](../components/commands/memory.py)
+- Page: [memory_console.py](../components/pages/memory_console/memory_console.py), [index.html](../components/pages/memory_console/index.html)

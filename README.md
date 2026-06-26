@@ -14,6 +14,7 @@ Long-term memory plugin for LangBot with a dual-layer design:
 - Injects profile memory and current speaker identity through an EventListener
 - Uses an EventListener to retrieve and inject relevant episodic memories before model invocation
 - Provides a `!memory` command for inspection and debugging
+- Provides a web **Memory Console** page for visual inspection: profiles, episodes (with pagination), audit log, exports, a metadata-isolation health check, and the last memory-injection snapshot
 - Provides `!memory list [page]` to browse episodic memories with pagination
 - Provides `!memory forget <episode_id>` to delete a specific episode
 - Provides `!memory search <query>` to search episodes (results include episode IDs)
@@ -518,6 +519,7 @@ No, that duplication is exactly what the current design avoids:
 - EventListener: [memory_injector.py](components/event_listener/memory_injector.py)
 - Tools: [remember.py](components/tools/remember.py), [recall_memory.py](components/tools/recall_memory.py), [update_profile.py](components/tools/update_profile.py), [forget.py](components/tools/forget.py)
 - Command: [memory.py](components/commands/memory.py)
+- Page: [memory_console.py](components/pages/memory_console/memory_console.py), [index.html](components/pages/memory_console/index.html)
 
 ## Current Gaps
 
@@ -528,6 +530,22 @@ Still worth adding later:
 - synchronized updates for localized docs
 - concrete JSON import examples
 - best-practice examples for `remember`, `recall_memory`, and `update_profile`
+
+## Memory Console
+
+In addition to the `!memory` command surface, the plugin ships a web **Memory Console** page (registered under the plugin's Page component) for visual inspection and maintenance. It talks to the plugin through scoped page endpoints and never escapes the selected memory space.
+
+The console is organized into a scope sidebar plus tabbed panels:
+
+- **Memory Space sidebar** — pick a known scope, or fill in `bot_uuid` / `session_name` / `isolation` and click **Derive** to compute the matching `scope_key` and `user_key`. An **Advanced / Raw** area exposes the underlying keys for power users.
+- **Profiles** — view the session profile and the current speaker profile for the selected scope.
+- **Episodes** — list (paginated) or semantic-search L2 episodes for the current `user_key`, filtered by lifecycle status; archive, restore, or delete individual episodes inline. Every mutating action writes a scoped audit entry, exactly like the equivalent `!memory` command.
+- **Injection** — load the **last memory-injection snapshot** for the scope: whether anything was injected on the latest turn, how many blocks and characters, which speaker, the session/speaker profiles that were used, and the L2 episodes that were auto-recalled. This answers "what did the bot actually remember on the last turn?" without scraping logs.
+- **Audit** — browse (paginated) and export the scoped audit log.
+- **Export** — export L1 profiles and L2 episodes for the current scope as JSON.
+- **Diagnostics** — **Run Health Check** executes the same metadata-isolation probe as `!memory health` directly from the UI (KB config, embedding model, and `user_key` filter isolation on search / list / delete), rendered as red/amber/green status cards. Use this before trusting scoped recall, especially on backends listed as unsupported above. Note: the console cannot verify that the KB is attached to a specific pipeline — run `!memory health` inside a pipeline to confirm that part.
+
+The console is i18n-aware (`en_US`, `zh_Hans`) and follows the host LangBot light/dark theme.
 
 ## Logging
 
@@ -540,6 +558,8 @@ You will see logs for:
 - profile injection before model invocation
 - automatic L2 memory retrieval in the KnowledgeEngine
 - episodic memory vector writes, searches, import batches, and deletes
+
+Beyond logs, the most recent profile injection and L2 recall for each scope are also persisted as a structured snapshot and surfaced in the Memory Console's **Injection** tab, so you can inspect runtime behavior visually instead of only through log scraping.
 
 Typical log messages look like:
 

@@ -14,6 +14,7 @@ LangBot 向けの長期記憶プラグインです。二層構造の記憶モデ
 - EventListener でプロフィールと現在の話者情報を自動注入します
 - EventListener によりモデル呼び出し前に関連する記憶を自動検索して注入します
 - `!memory` コマンドで状態確認とデバッグができます
+- 視覚的に確認できる Web 版**メモリコンソール**ページを提供します（プロファイル、情景記憶（ページネーション対応）、監査ログ、エクスポート、metadata 分離のヘルスチェック、直近のメモリ注入スナップショット）
 - `!memory list [page]` でエピソード記憶をページ単位で一覧できます
 - `!memory forget <episode_id>` で特定のエピソードを削除できます
 - `!memory search <query>` でエピソード記憶を検索できます（結果には episode ID を含みます）
@@ -422,12 +423,29 @@ SDK はすでに `vector_list` API を提供しており、これにより L2 �
 - 自動 L2 recall は LongTermMemory が担当します
 - さらに必要なら AgenticRAG から明示的に query できます
 
+## メモリコンソール
+
+`!memory` コマンドに加えて、本プラグインは視覚的な確認とメンテナンスのための Web 版**メモリコンソール**ページ（プラグインの Page コンポーネントとして登録）を同梱しています。スコープで制限されたページエンドポイント経由でプラグインと通信し、選択中のメモリ空間を越えて操作することはありません。
+
+コンソールは「メモリ空間サイドバー」と複数のタブで構成されます：
+
+- **メモリ空間サイドバー** —— 既存のスコープを選ぶか、`bot_uuid` / `session_name` / `isolation` を入力して **Derive** をクリックすると、対応する `scope_key` と `user_key` を計算します。「Advanced / Raw」領域では内部キーを直接編集できます。
+- **プロファイル** —— 選択中スコープのセッションプロファイルと現在の話者プロファイルを表示します。
+- **情景記憶** —— 現在の `user_key` の L2 情景記憶をページ単位で一覧・意味検索し、ライフサイクル状態で絞り込み、各レコードをその場でアーカイブ・復元・削除できます。各更新操作は対応する `!memory` コマンドと同様にスコープ付き監査エントリを書き込みます。
+- **注入スナップショット** —— そのスコープの**直近のメモリ注入スナップショット**を読み込みます：今回注入したか、ブロック数と文字数、話者、使用したプロファイル、自動召喚された L2 情景記憶。ログを漁らずに「ボットが前回何を覚えていたか」を確認できます。
+- **監査** —— スコープ付き監査ログをページ単位で閲覧・エクスポートします。
+- **エクスポート** —— 現在のスコープの L1 プロファイルと L2 情景記憶を JSON でエクスポートします。
+- **診断** —— **ヘルスチェック実行**で、`!memory health` と同じ metadata 分離プローブ（KB 設定、埋め込みモデル、search / list / delete における `user_key` フィルタ分離）を UI から直接実行し、赤/黄/緑のステータスカードで表示します。注意：コンソールは KB が特定のパイプラインに接続されているかを検証できません。その点はパイプライン内で `!memory health` を実行して確認してください。
+
+コンソールは i18n 対応（`en_US`、`zh_Hans`）で、ホスト LangBot のライト/ダークテーマに追従します。
+
 ## コンポーネント
 
 - KnowledgeEngine: [memory_engine.py](../components/knowledge_engine/memory_engine.py)
 - EventListener: [memory_injector.py](../components/event_listener/memory_injector.py)
 - Tools: [remember.py](../components/tools/remember.py), [recall_memory.py](../components/tools/recall_memory.py), [update_profile.py](../components/tools/update_profile.py), [forget.py](../components/tools/forget.py)
 - Command: [memory.py](../components/commands/memory.py)
+- Page: [memory_console.py](../components/pages/memory_console/memory_console.py), [index.html](../components/pages/memory_console/index.html)
 
 ## 今後の補足候補
 

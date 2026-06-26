@@ -162,6 +162,7 @@ class MemoryInjector(EventListener):
 
         launcher_type, launcher_id = store.split_session_name(session_name)
         scope_key = store.get_session_key(bot_uuid, launcher_type, launcher_id)
+        user_key = store.get_user_key(scope_key, isolation, bot_uuid)
         sender_id = str(query_vars.get("sender_id", "") or "")
         sender_name = str(query_vars.get("sender_name", "") or "")
 
@@ -177,23 +178,28 @@ class MemoryInjector(EventListener):
                 speaker_profile, "## Current Speaker Profile"
             )
 
+        def _profile_summary(profile: dict | None) -> dict | None:
+            if not profile:
+                return None
+            return {
+                "name": profile.get("name", ""),
+                "traits": profile.get("traits", []),
+                "preferences": profile.get("preferences", []),
+                "notes": profile.get("notes", ""),
+                "updated_at": profile.get("updated_at", ""),
+            }
+
         # --- context sharing for other plugins ---
         await api.set_query_var("_ltm_context", {
             "speaker": {"id": sender_id, "name": sender_name},
-            "session_profile": {
-                "name": session_profile.get("name", ""),
-                "traits": session_profile.get("traits", []),
-                "preferences": session_profile.get("preferences", []),
-                "notes": session_profile.get("notes", ""),
-                "updated_at": session_profile.get("updated_at", ""),
+            "session_profile": _profile_summary(session_profile) or {
+                "name": "",
+                "traits": [],
+                "preferences": [],
+                "notes": "",
+                "updated_at": "",
             },
-            "speaker_profile": {
-                "name": speaker_profile.get("name", ""),
-                "traits": speaker_profile.get("traits", []),
-                "preferences": speaker_profile.get("preferences", []),
-                "notes": speaker_profile.get("notes", ""),
-                "updated_at": speaker_profile.get("updated_at", ""),
-            } if speaker_profile else None,
+            "speaker_profile": _profile_summary(speaker_profile),
             "episodes": retrieved_episodes,
         })
 
@@ -210,7 +216,37 @@ class MemoryInjector(EventListener):
         elif sender_id:
             blocks.append(f"## Current Speaker\n- ID: {sender_id}")
 
+        async def _record_snapshot(injected: bool, injection_chars: int) -> None:
+            """Persist the latest injection snapshot so the memory console can
+            show what was actually recalled this turn (not only via logs)."""
+            try:
+                await store.save_injection_snapshot(scope_key, {
+                    "recorded_at": store._now_timestamp(),
+                    "query_id": event_ctx.query_id,
+                    "session_name": session_name,
+                    "scope_key": scope_key,
+                    "user_key": user_key,
+                    "kb_id": kb_id,
+                    "isolation": isolation,
+                    "speaker": {"id": sender_id, "name": sender_name},
+                    "naive_rag_suppressed": "_knowledge_base_uuids" in query_vars,
+                    "session_profile": _profile_summary(session_profile),
+                    "speaker_profile": _profile_summary(speaker_profile),
+                    "episodes": retrieved_episodes,
+                    "episode_count": len(retrieved_episodes),
+                    "block_count": len(blocks),
+                    "injected": injected,
+                    "injection_chars": injection_chars,
+                })
+            except Exception:
+                logger.exception(
+                    "[LongTermMemory] failed to persist injection snapshot: query_id=%s scope_key=%s",
+                    event_ctx.query_id,
+                    scope_key,
+                )
+
         if not blocks:
+            await _record_snapshot(injected=False, injection_chars=0)
             logger.info(
                 "[LongTermMemory] memory injection skipped: query_id=%s scope_key=%s sender_id=%s reason=no_profile_blocks",
                 event_ctx.query_id,
@@ -230,6 +266,7 @@ class MemoryInjector(EventListener):
             "or facts only needed for the immediate answer.\n\n"
             + "\n\n".join(blocks)
         )
+        await _record_snapshot(injected=True, injection_chars=len(injection))
         logger.info(
             "[LongTermMemory] memory injection ready: query_id=%s kb_id=%s scope_key=%s sender_id=%s block_count=%s prompt_chars=%s",
             event_ctx.query_id,

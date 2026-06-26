@@ -14,6 +14,7 @@ Plugin bộ nhớ dài hạn cho LangBot với thiết kế hai lớp:
 - Chèn bộ nhớ cấu hình và danh tính người nói hiện tại thông qua một EventListener
 - Sử dụng một EventListener để truy xuất và chèn các bộ nhớ tình tiết liên quan trước khi gọi mô hình
 - Cung cấp lệnh `!memory` để kiểm tra và gỡ lỗi
+- Cung cấp trang web **Bảng điều khiển Bộ nhớ** để kiểm tra trực quan: hồ sơ, tình tiết (có phân trang), nhật ký kiểm toán, xuất dữ liệu, kiểm tra sức khỏe cô lập metadata, và ảnh chụp lần chèn bộ nhớ gần nhất
 - Cung cấp lệnh `!memory list [page]` để duyệt các bộ nhớ tình tiết với tính năng phân trang
 - Cung cấp lệnh `!memory forget <episode_id>` để xóa một tình tiết cụ thể
 - Cung cấp lệnh `!memory search <query>` để tìm kiếm các tình tiết (kết quả bao gồm ID tình tiết)
@@ -430,12 +431,29 @@ Không, sự trùng lặp đó chính là điều mà thiết kế hiện tại 
 - việc gọi lại L2 tự động được xử lý bởi LongTermMemory
 - việc truy xuất sâu hơn có thể thực hiện thông qua AgenticRAG
 
+## Bảng điều khiển Bộ nhớ
+
+Ngoài lệnh `!memory`, plugin còn đi kèm một trang web **Bảng điều khiển Bộ nhớ** (đăng ký như thành phần Page của plugin) để kiểm tra trực quan và bảo trì. Nó giao tiếp với plugin thông qua các endpoint trang bị giới hạn phạm vi và không bao giờ vượt ra ngoài không gian bộ nhớ đang chọn.
+
+Bảng điều khiển gồm một thanh bên phạm vi cùng các bảng tab:
+
+- **Thanh bên không gian bộ nhớ** —— chọn một phạm vi đã biết, hoặc điền `bot_uuid` / `session_name` / `isolation` rồi nhấn **Derive** để tính ra `scope_key` và `user_key` tương ứng. Khu vực **Advanced / Raw** hiển thị các khóa nội bộ.
+- **Hồ sơ** —— xem hồ sơ phiên và hồ sơ người nói hiện tại của phạm vi đã chọn.
+- **Tình tiết** —— liệt kê (có phân trang) hoặc tìm kiếm ngữ nghĩa các tình tiết L2 của `user_key` hiện tại, lọc theo trạng thái vòng đời; lưu trữ, khôi phục hoặc xóa từng bản ghi tại chỗ. Mỗi thao tác thay đổi đều ghi một mục kiểm toán theo phạm vi, giống hệt lệnh `!memory` tương ứng.
+- **Chèn (Injection)** —— tải **ảnh chụp lần chèn bộ nhớ gần nhất** của phạm vi: lượt vừa rồi có chèn gì không, bao nhiêu khối và ký tự, người nói nào, các hồ sơ đã dùng và các tình tiết L2 được tự động truy hồi. Trả lời câu hỏi "bot đã nhớ gì ở lượt trước?" mà không cần lục nhật ký.
+- **Kiểm toán** —— duyệt (có phân trang) và xuất nhật ký kiểm toán theo phạm vi.
+- **Xuất** —— xuất hồ sơ L1 và tình tiết L2 của phạm vi hiện tại dưới dạng JSON.
+- **Chẩn đoán** —— **Run Health Check** chạy cùng một phép dò cô lập metadata như `!memory health` ngay từ giao diện (cấu hình KB, mô hình embedding, và sự cô lập của bộ lọc `user_key` trên search / list / delete), hiển thị dưới dạng thẻ trạng thái đỏ/vàng/xanh. Lưu ý: bảng điều khiển không thể xác minh KB đã được gắn vào một pipeline cụ thể hay chưa; hãy chạy `!memory health` bên trong một pipeline để xác nhận phần đó.
+
+Bảng điều khiển hỗ trợ i18n (`en_US`, `zh_Hans`) và tuân theo giao diện sáng/tối của LangBot máy chủ.
+
 ## Các thành phần
 
 - KnowledgeEngine: [memory_engine.py](components/knowledge_engine/memory_engine.py)
 - EventListener: [memory_injector.py](components/event_listener/memory_injector.py)
 - Công cụ: [remember.py](components/tools/remember.py), [recall_memory.py](components/tools/recall_memory.py), [update_profile.py](components/tools/update_profile.py), [forget.py](components/tools/forget.py)
 - Lệnh: [memory.py](components/commands/memory.py)
+- Page: [memory_console.py](components/pages/memory_console/memory_console.py), [index.html](components/pages/memory_console/index.html)
 
 ## Các khoảng trống hiện tại
 

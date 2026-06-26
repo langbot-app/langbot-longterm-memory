@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-import uuid
 from typing import AsyncGenerator, NamedTuple
 
 from langbot_plugin.api.definition.components.command.command import Command
@@ -263,132 +262,15 @@ class Memory(Command):
         ctx: _RuntimeContext,
         embedding_model_uuid: str,
     ) -> tuple[str, list[str]]:
-        probe_id = uuid.uuid4().hex[:10]
-        id_a = f"ltm-health-{probe_id}-a"
-        id_b = f"ltm-health-{probe_id}-b"
-        user_a = f"ltm-health:{probe_id}:a"
-        user_b = f"ltm-health:{probe_id}:b"
-        probe_text_a = f"LongTermMemory health probe {probe_id} alpha"
-        probe_text_b = f"LongTermMemory health probe {probe_id} beta"
-        ids = [id_a, id_b]
-        lines: list[str] = []
-        status = "OK"
-
-        def mark(new_status: str) -> None:
-            nonlocal status
-            status = Memory._combine_status([status, new_status])
-
-        try:
-            vectors = await plugin.invoke_embedding(
-                embedding_model_uuid,
-                [probe_text_a, probe_text_b],
-            )
-            await plugin.vector_upsert(
-                collection_id=ctx.kb_id,
-                vectors=vectors,
-                ids=ids,
-                metadata=[
-                    {
-                        "content": probe_text_a,
-                        "user_key": user_a,
-                        "source": "health_probe",
-                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    },
-                    {
-                        "content": probe_text_b,
-                        "user_key": user_b,
-                        "source": "health_probe",
-                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    },
-                ],
-                documents=[probe_text_a, probe_text_b],
-            )
-            lines.append("OK: wrote temporary metadata probe records")
-
-            search_results = await plugin.vector_search(
-                collection_id=ctx.kb_id,
-                query_vector=vectors[0],
-                top_k=5,
-                filters={"user_key": user_a},
-            )
-            search_ids = {item.get("id") for item in search_results}
-            if id_b in search_ids:
-                mark("ERROR")
-                lines.append(
-                    "ERROR: vector_search filter leaked another user_key result"
-                )
-            elif id_a in search_ids:
-                lines.append("OK: vector_search respects user_key metadata filter")
-            else:
-                mark("WARN")
-                lines.append(
-                    "WARN: vector_search filter did not return its own probe record"
-                )
-
-            try:
-                listed = await plugin.vector_list(
-                    collection_id=ctx.kb_id,
-                    filters={"user_key": user_a},
-                    limit=10,
-                    offset=0,
-                )
-                list_ids = {item.get("id") for item in listed.get("items", [])}
-                if id_b in list_ids:
-                    mark("ERROR")
-                    lines.append(
-                        "ERROR: vector_list filter leaked another user_key result"
-                    )
-                elif id_a in list_ids:
-                    lines.append("OK: vector_list respects user_key metadata filter")
-                else:
-                    mark("WARN")
-                    lines.append(
-                        "WARN: vector_list did not return its own probe record"
-                    )
-            except Exception as exc:
-                mark("WARN")
-                lines.append(f"WARN: vector_list probe failed: {exc}")
-
-            try:
-                deleted = await plugin.vector_delete(
-                    collection_id=ctx.kb_id,
-                    filters={"user_key": user_a},
-                )
-                if deleted == 1:
-                    lines.append("OK: vector_delete respects user_key metadata filter")
-                elif deleted == 0:
-                    mark("WARN")
-                    lines.append(
-                        "WARN: vector_delete filter did not delete its own probe record"
-                    )
-                else:
-                    mark("ERROR")
-                    lines.append(
-                        "ERROR: vector_delete filter deleted more probe records than expected"
-                    )
-            except Exception as exc:
-                mark("WARN")
-                lines.append(f"WARN: vector_delete filter probe failed: {exc}")
-
-        except Exception as exc:
-            mark("ERROR")
-            lines.append(f"ERROR: metadata filter probe failed: {exc}")
-        finally:
-            cleanup_lines = []
-            for episode_id in ids:
-                try:
-                    await plugin.vector_delete(
-                        collection_id=ctx.kb_id,
-                        file_ids=[episode_id],
-                    )
-                    cleanup_lines.append(f"OK: cleaned probe record {episode_id}")
-                except Exception as exc:
-                    cleanup_lines.append(
-                        f"WARN: failed to clean probe record {episode_id}: {exc}"
-                    )
-            lines.extend(cleanup_lines)
-
-        return status, lines
+        result = await plugin.memory_store.run_metadata_filter_probe(
+            collection_id=ctx.kb_id,
+            embedding_model_uuid=embedding_model_uuid,
+        )
+        lines = [
+            f"{check.get('status', 'WARN')}: {check.get('detail', '')}"
+            for check in result.get("checks", [])
+        ]
+        return result.get("status", "WARN"), lines
 
     def __init__(self):
         super().__init__()

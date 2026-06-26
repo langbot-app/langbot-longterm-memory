@@ -32,6 +32,10 @@ class MemoryConsolePage(Page):
                 return PageResponse.ok(await self._list_audit(self._body(request)))
             if request.endpoint == "/audit/export" and request.method == "POST":
                 return PageResponse.ok(await self._export_audit(self._body(request)))
+            if request.endpoint == "/health" and request.method == "POST":
+                return PageResponse.ok(await self._health(self._body(request)))
+            if request.endpoint == "/injection" and request.method == "POST":
+                return PageResponse.ok(await self._injection(self._body(request)))
 
             return PageResponse.fail(f"Unknown endpoint: {request.method} {request.endpoint}")
         except ValueError as exc:
@@ -416,6 +420,68 @@ class MemoryConsolePage(Page):
             "entries": entries,
             "count": len(entries),
         }
+
+    async def _health(self, body: dict[str, Any]) -> dict[str, Any]:
+        collection_id = self._required_string(body, "collection_id")
+        embedding_model_uuid = self._string(body, "embedding_model_uuid")
+
+        checks: list[dict[str, str]] = []
+        statuses: list[str] = []
+
+        def add(check_id: str, status: str, detail: str) -> None:
+            checks.append({"id": check_id, "status": status, "detail": detail})
+            statuses.append(status)
+
+        kb_configs = await self._store.get_kb_configs()
+        if collection_id in kb_configs:
+            add("kb_config", "OK", f"memory KB configured: {collection_id}")
+            if not embedding_model_uuid:
+                embedding_model_uuid = str(
+                    kb_configs[collection_id].get("embedding_model_uuid", "") or ""
+                )
+        else:
+            add("kb_config", "ERROR", f"memory KB is not configured: {collection_id}")
+
+        if embedding_model_uuid:
+            add("embedding", "OK", f"embedding model configured: {embedding_model_uuid}")
+        else:
+            add("embedding", "ERROR", "no embedding model configured")
+
+        if collection_id in kb_configs and embedding_model_uuid:
+            probe = await self._store.run_metadata_filter_probe(
+                collection_id=collection_id,
+                embedding_model_uuid=embedding_model_uuid,
+            )
+            checks.extend(probe.get("checks", []))
+            statuses.append(probe.get("status", "WARN"))
+        else:
+            add(
+                "probe",
+                "WARN",
+                "metadata filter probe skipped because prerequisites failed",
+            )
+
+        return {
+            "status": self._combine_status(statuses),
+            "checks": checks,
+            "checked_at": self._now(),
+            "note": (
+                "Pipeline activation is not verified from the console; run "
+                "!memory health in a pipeline to confirm the KB is attached."
+            ),
+        }
+
+    async def _injection(self, body: dict[str, Any]) -> dict[str, Any]:
+        scope_key = self._required_string(body, "scope_key")
+        snapshot = await self._store.get_injection_snapshot(scope_key)
+        return {"scope_key": scope_key, "snapshot": snapshot}
+
+    @staticmethod
+    def _combine_status(statuses: list[str]) -> str:
+        if not statuses:
+            return "WARN"
+        rank = {"ERROR": 0, "WARN": 1, "OK": 2}
+        return min(statuses, key=lambda s: rank.get(s, 1))
 
     @staticmethod
     def _now() -> str:

@@ -22,8 +22,9 @@ class FakeAPI:
 
 
 class FakeStore:
-    def __init__(self, kb: tuple[str, dict] | None = None):
+    def __init__(self, kb: tuple[str, dict] | None = None, plugin=None):
         self.kb = kb
+        self.plugin = plugin
 
     async def get_kb_config(self):
         return self.kb
@@ -34,10 +35,23 @@ class FakeStore:
         kb_id, config = self.kb
         return "bot-1:group_1", "bot-1:group_1", kb_id, config.get("isolation", "session"), config
 
+    async def run_metadata_filter_probe(self, collection_id, embedding_model_uuid):
+        # Delegate to the real probe so this test exercises the shared logic
+        # that backs both !memory health and the memory console.
+        from store.memory_store import MemoryStore
+
+        return await MemoryStore(self.plugin).run_metadata_filter_probe(
+            collection_id=collection_id,
+            embedding_model_uuid=embedding_model_uuid,
+        )
+
 
 class FakePlugin:
     def __init__(self, *, leak: bool = False, delete_leak: bool = False):
-        self.memory_store = FakeStore(("kb-1", {"embedding_model_uuid": "emb-1", "isolation": "session"}))
+        self.memory_store = FakeStore(
+            ("kb-1", {"embedding_model_uuid": "emb-1", "isolation": "session"}),
+            plugin=self,
+        )
         self.plugin_runtime_handler = object()
         self.leak = leak
         self.delete_leak = delete_leak

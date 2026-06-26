@@ -14,6 +14,7 @@ Plugin de memoria a largo plazo para LangBot con un diseño de doble capa:
 - Inyecta la memoria del perfil y la identidad del hablante actual a través de un EventListener
 - Utiliza un EventListener para recuperar e inyectar memorias episódicas relevantes antes de la invocación del modelo
 - Proporciona un comando `!memory` para inspección y depuración
+- Proporciona una página web **Consola de Memoria** para inspección visual: perfiles, episodios (con paginación), registro de auditoría, exportaciones, una comprobación de salud de aislamiento de metadatos y la última instantánea de inyección de memoria
 - Proporciona `!memory list [page]` para examinar memorias episódicas con paginación
 - Proporciona `!memory forget <episode_id>` para eliminar un episodio específico
 - Proporciona `!memory search <query>` para buscar episodios (los resultados incluyen IDs de episodios)
@@ -430,12 +431,29 @@ No, esa duplicación es exactamente lo que evita el diseño actual:
 - la recuperación automática L2 es manejada por LongTermMemory
 - la recuperación ad hoc más profunda aún puede realizarse a través de AgenticRAG
 
+## Consola de Memoria
+
+Además del comando `!memory`, el plugin incluye una página web **Consola de Memoria** (registrada como el componente Page del plugin) para inspección visual y mantenimiento. Se comunica con el plugin a través de endpoints de página acotados al alcance y nunca sale del espacio de memoria seleccionado.
+
+La consola se organiza en una barra lateral de espacio más paneles con pestañas:
+
+- **Barra lateral de espacio de memoria** —— elige un alcance conocido, o completa `bot_uuid` / `session_name` / `isolation` y haz clic en **Derive** para calcular el `scope_key` y el `user_key` correspondientes. Un área **Advanced / Raw** expone las claves internas.
+- **Perfiles** —— muestra el perfil de sesión y el perfil del hablante actual del alcance seleccionado.
+- **Episodios** —— lista (paginada) o busca semánticamente los episodios L2 del `user_key` actual, filtrados por estado del ciclo de vida; archiva, restaura o elimina episodios en línea. Cada acción de modificación escribe una entrada de auditoría acotada, igual que el comando `!memory` equivalente.
+- **Inyección** —— carga la **última instantánea de inyección de memoria** del alcance: si se inyectó algo en el último turno, cuántos bloques y caracteres, qué hablante, los perfiles usados y los episodios L2 recuperados automáticamente. Responde "¿qué recordó el bot en el último turno?" sin revisar los registros.
+- **Auditoría** —— navega (paginado) y exporta el registro de auditoría acotado.
+- **Exportar** —— exporta los perfiles L1 y los episodios L2 del alcance actual como JSON.
+- **Diagnóstico** —— **Run Health Check** ejecuta la misma sonda de aislamiento de metadatos que `!memory health` directamente desde la interfaz (configuración del KB, modelo de embedding y aislamiento del filtro `user_key` en search / list / delete), representada como tarjetas de estado rojas/ámbar/verdes. Nota: la consola no puede verificar que el KB esté adjunto a un pipeline específico; ejecuta `!memory health` dentro de un pipeline para confirmar esa parte.
+
+La consola admite i18n (`en_US`, `zh_Hans`) y sigue el tema claro/oscuro de LangBot anfitrión.
+
 ## Componentes
 
 - KnowledgeEngine: [memory_engine.py](components/knowledge_engine/memory_engine.py)
 - EventListener: [memory_injector.py](components/event_listener/memory_injector.py)
 - Herramientas: [remember.py](components/tools/remember.py), [recall_memory.py](components/tools/recall_memory.py), [update_profile.py](components/tools/update_profile.py), [forget.py](components/tools/forget.py)
 - Comando: [memory.py](components/commands/memory.py)
+- Page: [memory_console.py](components/pages/memory_console/memory_console.py), [index.html](components/pages/memory_console/index.html)
 
 ## Brechas actuales
 
